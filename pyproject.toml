@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flosswing"
+version = "0.1.0"
+description = "Local-CLI vulnerability research harness."
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "FlossWing contributors" }]
+dependencies = [
+    "claude-agent-sdk",
+    "click",
+    "sqlalchemy",
+    "alembic",
+    "pydantic",
+    "docker",
+    "tree-sitter",
+    "python-ulid",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+flosswing = "flosswing.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["flosswing"]
+
+# -----------------------------------------------------------------------------
+# Ruff
+# -----------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["flosswing/state/migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # isort
+    "UP",            # pyupgrade
+    "B",             # flake8-bugbear
+    "SIM",           # flake8-simplify
+    "RUF",           # ruff-specific
+]
+ignore = []
+
+# -----------------------------------------------------------------------------
+# Mypy
+# -----------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+# Migration scripts are imported dynamically by Alembic and don't benefit from
+# strict typing; exclude them.
+exclude = "^flosswing/state/migrations/versions/"
+
+[[tool.mypy.overrides]]
+# Third-party packages without stubs we care about typing through.
+module = [
+    "claude_agent_sdk",
+    "claude_agent_sdk.*",
+    "docker",
+    "docker.*",
+    "tree_sitter",
+    "tree_sitter.*",
+]
+ignore_missing_imports = true
+
+# -----------------------------------------------------------------------------
+# Pytest
+# -----------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
