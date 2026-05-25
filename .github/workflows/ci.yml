@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-type-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Mypy strict
+        run: mypy --strict flosswing
+
+      - name: Alembic upgrade head against temp SQLite
+        run: |
+          TMPDB="$(mktemp -u --suffix=.db)"
+          export FLOSSWING_DB_URL="sqlite:///${TMPDB}"
+          alembic -c alembic.ini upgrade head
+          alembic -c alembic.ini downgrade base
+          alembic -c alembic.ini upgrade head
+
+      - name: Pytest
+        run: pytest tests/unit
