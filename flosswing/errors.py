@@ -9,7 +9,7 @@ output.
 from __future__ import annotations
 
 import re
-from typing import Final
+from typing import ClassVar, Final
 
 
 class FlosswingError(Exception):
@@ -20,8 +20,8 @@ class FlosswingError(Exception):
     and whether the agent could reasonably retry.
     """
 
-    code: str = "flosswing_error"
-    retryable: bool = False
+    code: ClassVar[str] = "flosswing_error"
+    retryable: ClassVar[bool] = False
 
     def __init__(self, message: str = "") -> None:
         super().__init__(message)
@@ -46,7 +46,12 @@ class FileNotFoundInRepoError(FlosswingError):
     retryable = False
 
 
-class IsDirectoryError_(FlosswingError):
+class PathNotFoundError(FlosswingError):
+    code = "not_found"
+    retryable = False
+
+
+class PathIsDirectoryError(FlosswingError):
     code = "is_directory"
     retryable = False
 
@@ -56,7 +61,7 @@ class BinaryFileError(FlosswingError):
     retryable = False
 
 
-class NotADirectoryError_(FlosswingError):
+class PathNotDirectoryError(FlosswingError):
     code = "not_a_directory"
     retryable = False
 
@@ -124,7 +129,7 @@ _PATTERNS: Final[list[re.Pattern[str]]] = [
     re.compile(r"(ANTHROPIC_FOUNDRY_API_KEY\s*=\s*)\S+"),
     # JWT-like tokens (three base64 segments separated by dots).
     # Conservative: requires the first segment to start with "ey" (typical JWT header).
-    re.compile(r"\bey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+    re.compile(r"\bey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
 ]
 
 

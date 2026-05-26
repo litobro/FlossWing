@@ -22,7 +22,14 @@ from flosswing.errors import (
             "ANTHROPIC_FOUNDRY_API_KEY=foundry-key-zzz oops",
             "foundry-key-zzz",
         ),
-        ("token = eyJhbGciOiJIUzI1NiJ9.payload.sig done", "eyJhbGciOiJIUzI1NiJ9.payload.sig"),
+        (
+            "token = eyJhbGciOiJIUzI1NiJ9"
+            ".eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+            ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c done",
+            "eyJhbGciOiJIUzI1NiJ9"
+            ".eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+            ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        ),
     ],
 )
 def test_scrub_redacts_known_credential_forms(raw: str, must_not_contain: str) -> None:
