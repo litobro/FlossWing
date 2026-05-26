@@ -22,16 +22,16 @@ class Run(Base):
     __tablename__ = "runs"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
-    target_repo_path: Mapped[str] = mapped_column(Text, nullable=False)
-    target_repo_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
-    depth: Mapped[str] = mapped_column(Text, nullable=False)
-    budget_total: Mapped[int] = mapped_column(Integer, nullable=False)
-    budget_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    started_at: Mapped[str] = mapped_column(Text, nullable=False)
-    finished_at: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="running")
-    config_json: Mapped[str] = mapped_column(Text, nullable=False)
-    flosswing_version: Mapped[str] = mapped_column(Text, nullable=False)
+    target_repo_path: Mapped[str] = mapped_column(Text)
+    target_repo_sha: Mapped[str | None] = mapped_column(Text)
+    depth: Mapped[str] = mapped_column(Text)
+    budget_total: Mapped[int] = mapped_column(Integer)
+    budget_used: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[str] = mapped_column(Text)
+    finished_at: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="running")
+    config_json: Mapped[str] = mapped_column(Text)
+    flosswing_version: Mapped[str] = mapped_column(Text)
 
 
 class ReconArtifact(Base):
@@ -39,14 +39,14 @@ class ReconArtifact(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     run_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
     )
-    languages_json: Mapped[str] = mapped_column(Text, nullable=False)
-    build_commands_json: Mapped[str] = mapped_column(Text, nullable=False)
-    trust_boundaries_json: Mapped[str] = mapped_column(Text, nullable=False)
-    subsystems_json: Mapped[str] = mapped_column(Text, nullable=False)
-    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    recorded_at: Mapped[str] = mapped_column(Text, nullable=False)
+    languages_json: Mapped[str] = mapped_column(Text)
+    build_commands_json: Mapped[str] = mapped_column(Text)
+    trust_boundaries_json: Mapped[str] = mapped_column(Text)
+    subsystems_json: Mapped[str] = mapped_column(Text)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    recorded_at: Mapped[str] = mapped_column(Text)
 
 
 class HuntTask(Base):
@@ -54,19 +54,21 @@ class HuntTask(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     run_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
     )
-    attack_class: Mapped[str] = mapped_column(Text, nullable=False)
-    scope_hint: Mapped[str] = mapped_column(Text, nullable=False)
-    rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    priority: Mapped[str] = mapped_column(Text, nullable=False, default="normal")
-    source: Mapped[str] = mapped_column(Text, nullable=False)
-    parent_finding_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
-    created_at: Mapped[str] = mapped_column(Text, nullable=False)
-    started_at: Mapped[str | None] = mapped_column(Text, nullable=True)
-    finished_at: Mapped[str | None] = mapped_column(Text, nullable=True)
-    findings_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    attack_class: Mapped[str] = mapped_column(Text)
+    scope_hint: Mapped[str] = mapped_column(Text)
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    priority: Mapped[str] = mapped_column(Text, default="normal")
+    source: Mapped[str] = mapped_column(Text)
+    parent_finding_id: Mapped[str | None] = mapped_column(Text)
+    # parent_finding_id intentionally NOT FK'd; see docs/schema.sql:280-282.
+    # Add FK to findings.id when the Findings model lands (v0.3+).
+    status: Mapped[str] = mapped_column(Text, default="pending")
+    created_at: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[str | None] = mapped_column(Text)
+    finished_at: Mapped[str | None] = mapped_column(Text)
+    findings_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class AgentSession(Base):
@@ -74,22 +76,22 @@ class AgentSession(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     run_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
     )
-    stage: Mapped[str] = mapped_column(Text, nullable=False)
-    task_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    finding_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    model: Mapped[str] = mapped_column(Text, nullable=False)
-    system_prompt_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    cost_usd: Mapped[float] = mapped_column(REAL, nullable=False)
-    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
-    outcome: Mapped[str] = mapped_column(Text, nullable=False)
-    refusal_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    tool_calls_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    started_at: Mapped[str] = mapped_column(Text, nullable=False)
-    finished_at: Mapped[str] = mapped_column(Text, nullable=False)
+    stage: Mapped[str] = mapped_column(Text)
+    task_id: Mapped[str | None] = mapped_column(Text)
+    finding_id: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(Text)
+    system_prompt_hash: Mapped[str] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(Integer)
+    output_tokens: Mapped[int] = mapped_column(Integer)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(REAL)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(Text)
+    refusal_text: Mapped[str | None] = mapped_column(Text)
+    error_text: Mapped[str | None] = mapped_column(Text)
+    tool_calls_count: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[str] = mapped_column(Text)
+    finished_at: Mapped[str] = mapped_column(Text)
