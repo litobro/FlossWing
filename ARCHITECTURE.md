@@ -387,8 +387,18 @@ Highest to lowest:
 4. User config: `~/.config/flosswing/config.toml`
 5. Built-in defaults
 
-API key: `ANTHROPIC_API_KEY` env var only. Do not read it from config files. Do not
-store it in the state DB.
+Auth credentials (three accepted modes — pick whichever fits your environment):
+
+1. `ANTHROPIC_API_KEY` — direct Anthropic API.
+2. `ANTHROPIC_FOUNDRY_API_KEY` — Azure AI Foundry API key. Compatible because Foundry
+   hosts Anthropic models on the Messages API; the `claude` CLI handles routing.
+3. Microsoft Entra ID via `az login` (or `AZURE_CLIENT_ID` + `AZURE_TENANT_ID` +
+   `AZURE_CLIENT_SECRET` for service principals) — Entra ID against Foundry.
+
+Whichever set is present is forwarded verbatim to the spawned `claude` CLI via
+`ClaudeAgentOptions.env`. Credentials are env / OS keychain only — never config files,
+never the state DB, never logs. See `docs/specs/2026-05-25-v0.2-recon-plumbing-design.md`
+§ Authentication for rationale.
 
 ## v1 scope summary
 
