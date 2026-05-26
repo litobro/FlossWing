@@ -134,7 +134,9 @@ def grep(inp: GrepInput, *, repo_root: Path) -> GrepOutput:
             line_no = data.get("line_number", 0)
             before = pending_before.pop(path, [])
             m = GrepMatch(
-                path=path.lstrip("./"),
+                # removeprefix not lstrip: "./.github/x" must stay ".github/x"
+                # (lstrip("./") is a character-set strip that would eat the dot).
+                path=path.removeprefix("./"),
                 line_number=line_no,
                 line=line_text[:500],
                 context_before=before[-inp.context_lines :] if inp.context_lines else [],
