@@ -43,7 +43,26 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations against a live connection."""
+    """Run migrations against a live connection.
+
+    If ``config.attributes["connection"]`` is set, we use that connection
+    directly. This lets callers (e.g. session.py) inject a StaticPool
+    connection so that in-memory SQLite migrations are visible to the
+    same engine's later connections. Otherwise we create our own engine.
+    """
+    injected = config.attributes.get("connection")
+    if injected is not None:
+        context.configure(
+            connection=injected,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+            compare_type=True,
+            compare_server_default=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+        return
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
