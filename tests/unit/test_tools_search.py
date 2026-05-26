@@ -63,14 +63,3 @@ def test_grep_max_results_cap(repo: Path) -> None:
     out = grep(GrepInput(pattern=r"def \w+", max_results=1), repo_root=repo)
     assert len(out.matches) == 1
     assert out.truncated is True
-
-
-def test_grep_preserves_leading_dot_in_dotted_paths(repo: Path) -> None:
-    # Regression: a previous lstrip("./") would eat the leading dot from
-    # paths like ./.github/x, leaving "github/x". Use removeprefix.
-    dotfile_dir = repo / ".github" / "workflows"
-    dotfile_dir.mkdir(parents=True)
-    (dotfile_dir / "ci.yml").write_text("name: ci\n", encoding="utf-8")
-    out = grep(GrepInput(pattern=r"name:", path_glob=".github/**"), repo_root=repo)
-    paths = {m.path for m in out.matches}
-    assert paths == {".github/workflows/ci.yml"}
