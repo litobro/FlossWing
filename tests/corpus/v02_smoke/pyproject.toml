@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "v02-smoke-target"
+version = "0.0.1"
+requires-python = ">=3.11"
+
+[project.scripts]
+v02-smoke = "example.cli:main"
