@@ -18,7 +18,7 @@ from pathlib import Path
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -65,18 +65,19 @@ def engine() -> Engine:
         return _cached_engine
 
     db_url = _resolve_db_url()
+    parsed = make_url(db_url)
 
     # Auto-upgrade is safe in two cases:
     #   - in-memory DBs (always fresh)
     #   - SQLite file URLs that don't exist yet
     # Otherwise we leave the schema alone and let the user run upgrade.
-    is_memory = ":memory:" in db_url
+    is_memory = parsed.database == ":memory:"
     needs_upgrade = False
     if is_memory:
         needs_upgrade = True
-    elif db_url.startswith("sqlite:///"):
-        path = db_url[len("sqlite:///"):]
-        if path and not Path(path).exists():
+    elif parsed.drivername.startswith("sqlite"):
+        db_path = parsed.database or ""
+        if db_path and not Path(db_path).exists():
             needs_upgrade = True
 
     # In-memory SQLite: use StaticPool so every connection in this process
@@ -104,8 +105,12 @@ def engine() -> Engine:
 def session_factory() -> sessionmaker[Session]:
     """Return the cached session factory, initialising the engine if needed."""
     if _cached_session_factory is None:
-        engine()  # populates the factory as a side effect
-    assert _cached_session_factory is not None
+        engine()
+    if _cached_session_factory is None:
+        raise RuntimeError(
+            "engine() completed without initialising _cached_session_factory; "
+            "this is a bug in flosswing.state.session"
+        )
     return _cached_session_factory
 
 
