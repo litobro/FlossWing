@@ -95,7 +95,12 @@ async def run_scan(cfg: Config) -> ScanResult:
 
     with st_session.session_scope() as s:
         row = s.get(Run, run_id)
-        assert row is not None
+        # assert is erased under `python -O`; use an explicit guard.
+        if row is None:
+            raise RuntimeError(
+                f"runs row missing for run_id={run_id!r}; "
+                "this is a bug in flosswing.orchestrator"
+            )
         row.finished_at = finished_at
         row.status = final_status
         row.budget_used = recon_result.input_tokens + recon_result.output_tokens
