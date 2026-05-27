@@ -23,6 +23,18 @@ from flosswing.errors import (
             "foundry-key-zzz",
         ),
         (
+            "AZURE_CLIENT_SECRET=fake-azure-secret-XYZ in env dump",
+            "fake-azure-secret-XYZ",
+        ),
+        (
+            "AZURE_CLIENT_ID=11111111-2222-3333-4444-555555555555 oops",
+            "11111111-2222-3333-4444-555555555555",
+        ),
+        (
+            "AZURE_TENANT_ID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee in log",
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        ),
+        (
             "token = eyJhbGciOiJIUzI1NiJ9"
             ".eyJzdWIiOiIxMjM0NTY3ODkwIn0"
             ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c done",

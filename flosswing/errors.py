@@ -127,8 +127,17 @@ _PATTERNS: Final[list[re.Pattern[str]]] = [
     re.compile(r"(ANTHROPIC_API_KEY\s*=\s*)\S+"),
     # ANTHROPIC_FOUNDRY_API_KEY=<value>
     re.compile(r"(ANTHROPIC_FOUNDRY_API_KEY\s*=\s*)\S+"),
+    # Azure Entra ID env vars (per flosswing.config: AZURE_CLIENT_ID,
+    # AZURE_TENANT_ID, AZURE_CLIENT_SECRET). All three flow through auth_env;
+    # CLIENT_SECRET is the high-impact one but TENANT_ID / CLIENT_ID are
+    # still identifying material we don't want in logs or the state DB.
+    re.compile(r"(AZURE_CLIENT_SECRET\s*=\s*)\S+"),
+    re.compile(r"(AZURE_CLIENT_ID\s*=\s*)\S+"),
+    re.compile(r"(AZURE_TENANT_ID\s*=\s*)\S+"),
     # JWT-like tokens (three base64 segments separated by dots).
-    # Conservative: requires the first segment to start with "ey" (typical JWT header).
+    # Conservative: requires the first segment to start with "ey" (typical JWT header)
+    # AND each segment >= 10 chars to avoid false positives on strings like
+    # "eyconfig.production.env" in attacker-controlled repo contents.
     re.compile(r"\bey[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
 ]
 
