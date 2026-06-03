@@ -93,7 +93,8 @@ async def test_recon_stage_records_session_and_returns_summary(
     cfg = Config(
         repo_root=tmp_path,
         model="claude-opus-4-7",
-        token_budget=200_000,
+        recon_token_budget=200_000,
+        hunt_token_budget=200_000,
         auth_env={"ANTHROPIC_API_KEY": "sk-test"},
     )
 

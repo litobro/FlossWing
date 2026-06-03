@@ -56,7 +56,8 @@ def _config_for_run_row(cfg: Config) -> str:
     payload = {
         "repo_root": str(cfg.repo_root),
         "model": cfg.model,
-        "token_budget": cfg.token_budget,
+        "recon_token_budget": cfg.recon_token_budget,
+        "hunt_token_budget": cfg.hunt_token_budget,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)

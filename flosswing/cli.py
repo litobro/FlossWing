@@ -27,21 +27,33 @@ def main() -> None:
 @click.option(
     "--model",
     default=None,
-    help="Override the Recon model (default claude-opus-4-7).",
+    help="Override the agent model (default claude-opus-4-7).",
 )
 @click.option(
-    "--token-budget",
+    "--recon-token-budget",
     type=int,
     default=None,
-    help="Override the Recon token budget (default 200000).",
+    help="Override the Recon-stage token budget (default 200000).",
 )
-def scan(path: str, model: str | None, token_budget: int | None) -> None:
-    """Scan a cloned target repository at PATH (v0.2: Recon-only)."""
+@click.option(
+    "--hunt-token-budget",
+    type=int,
+    default=None,
+    help="Override the per-task Hunt token budget (default 200000).",
+)
+def scan(
+    path: str,
+    model: str | None,
+    recon_token_budget: int | None,
+    hunt_token_budget: int | None,
+) -> None:
+    """Scan a cloned target repository at PATH (Recon -> Hunt)."""
     try:
         cfg = fcfg.resolve(
             repo_root=Path(path),
             model=model,
-            token_budget=token_budget,
+            recon_token_budget=recon_token_budget,
+            hunt_token_budget=hunt_token_budget,
         )
     except FlosswingError as e:
         click.echo(e.message, err=True)
