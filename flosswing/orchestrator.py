@@ -1,4 +1,4 @@
-"""Top-level scan entry: creates the run row, drives Recon, finalizes."""
+"""Top-level scan entry: creates the run row, drives Recon -> Hunt, finalizes."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from ulid import ULID
 
 from flosswing import __version__
 from flosswing.config import Config
+from flosswing.stages import hunt as hunt_stage
 from flosswing.stages import recon as recon_stage
 from flosswing.state import session as st_session
 from flosswing.state.models import HuntTask, Run
@@ -46,8 +47,9 @@ def _git_sha(repo_root: Path) -> str | None:
 
 
 def _ensure_run_dir(run_id: str) -> Path:
-    base = Path.home() / ".flosswing" / "runs" / run_id / "recon"
-    base.mkdir(parents=True, exist_ok=True)
+    base = Path.home() / ".flosswing" / "runs" / run_id
+    (base / "recon").mkdir(parents=True, exist_ok=True)
+    (base / "hunt").mkdir(parents=True, exist_ok=True)
     return base
 
 
@@ -56,7 +58,8 @@ def _config_for_run_row(cfg: Config) -> str:
     payload = {
         "repo_root": str(cfg.repo_root),
         "model": cfg.model,
-        "token_budget": cfg.token_budget,
+        "recon_token_budget": cfg.recon_token_budget,
+        "hunt_token_budget": cfg.hunt_token_budget,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)
@@ -84,13 +87,35 @@ async def run_scan(cfg: Config) -> ScanResult:
 
     recon_result = await recon_stage.run(run_id=run_id, cfg=cfg)
 
-    happy = (
+    # Hunt runs only if Recon completed AND queued >=1 task.
+    recon_ok = (
         recon_result.outcome == "completed"
         and recon_result.recon_artifact_recorded
         and recon_result.hunt_tasks_queued >= 1
     )
-    final_status = "completed" if happy else "errored"
-    exit_code = 0 if happy else 1
+    if recon_ok:
+        hunt_result = await hunt_stage.run(
+            run_id=run_id,
+            repo=cfg.repo_root,
+            cfg=cfg,
+            session_factory=st_session.session_factory(),
+        )
+    else:
+        hunt_result = hunt_stage.HuntStageResult.skipped()
+
+    # Run finalization (per spec § Component responsibilities
+    # orchestrator.run_scan extension):
+    #   recon failed                       -> errored, exit 1
+    #   recon completed, 0 tasks queued    -> errored, exit 1
+    #   hunt processed >=1 AND >=1 success -> completed, exit 0
+    #   hunt processed >=1 AND 0 success   -> errored, exit 1
+    if not recon_ok:
+        final_status = "errored"
+    elif hunt_result.tasks_succeeded >= 1:
+        final_status = "completed"
+    else:
+        final_status = "errored"
+    exit_code = 0 if final_status == "completed" else 1
     finished_at = _now_iso()
 
     with st_session.session_scope() as s:
@@ -103,31 +128,59 @@ async def run_scan(cfg: Config) -> ScanResult:
             )
         row.finished_at = finished_at
         row.status = final_status
-        row.budget_used = recon_result.input_tokens + recon_result.output_tokens
+        row.budget_used = (
+            recon_result.input_tokens
+            + recon_result.output_tokens
+            + hunt_result.input_tokens_total
+            + hunt_result.output_tokens_total
+        )
 
+    # Build the summary string. Per spec § Success criteria #3:
+    # per-task lines from hunt_tasks + a roll-up footer.
     with st_session.session_scope() as s:
-        task_titles = [
-            f"  • {t.attack_class}: {t.scope_hint}"
-            for t in s.execute(select(HuntTask).where(HuntTask.run_id == run_id))
+        task_rows = list(
+            s.execute(select(HuntTask).where(HuntTask.run_id == run_id))
             .scalars()
             .all()
-        ]
+        )
+
+    task_lines: list[str] = []
+    for t in task_rows:
+        task_lines.append(
+            f"  - {t.attack_class} {t.scope_hint} -> {t.status}, "
+            f"{t.findings_count} findings"
+        )
 
     summary_lines = [
         f"Run {run_id} {final_status}.",
         f"  model:         {cfg.model}",
-        f"  outcome:       {recon_result.outcome}",
-        f"  artifact:      "
-        f"{'recorded' if recon_result.recon_artifact_recorded else 'NOT recorded'}",
-        f"  hunt tasks:    {recon_result.hunt_tasks_queued}",
-        *task_titles,
-        f"  tokens in/out: {recon_result.input_tokens} / {recon_result.output_tokens}",
-        f"  est. cost USD: {recon_result.cost_usd:.4f}",
+        "  recon:",
+        f"    outcome:     {recon_result.outcome}",
+        (
+            f"    artifact:    "
+            f"{'recorded' if recon_result.recon_artifact_recorded else 'NOT recorded'}"
+        ),
+        f"    tasks queued: {recon_result.hunt_tasks_queued}",
+        "  hunt:",
+        f"    tasks processed:    {hunt_result.tasks_processed}",
+        f"    succeeded:          {hunt_result.tasks_succeeded}",
+        f"    refused:            {hunt_result.tasks_refused}",
+        f"    budget_exceeded:    {hunt_result.tasks_budget_exceeded}",
+        f"    errored:            {hunt_result.tasks_errored}",
+        f"    findings recorded:  {hunt_result.findings_total}",
+        f"    tokens in/out:      "
+        f"{hunt_result.input_tokens_total} / {hunt_result.output_tokens_total}",
+        *task_lines,
+        f"  total tokens in/out: "
+        f"{recon_result.input_tokens + hunt_result.input_tokens_total}"
+        f" / "
+        f"{recon_result.output_tokens + hunt_result.output_tokens_total}",
+        f"  est. cost USD (recon only): {recon_result.cost_usd:.4f}",
     ]
     if recon_result.refusal_text:
-        summary_lines.append(f"  refusal:       {recon_result.refusal_text}")
+        summary_lines.append(f"  recon refusal: {recon_result.refusal_text}")
     if recon_result.error_text:
-        summary_lines.append(f"  error:         {recon_result.error_text}")
+        summary_lines.append(f"  recon error:   {recon_result.error_text}")
 
     return ScanResult(
         run_id=run_id, exit_code=exit_code, summary="\n".join(summary_lines)

@@ -112,6 +112,31 @@ class ReconAlreadyRecordedError(FlosswingError):
     retryable = False
 
 
+class PathNotInRepoError(FlosswingError):
+    code = "path_not_in_repo"
+    retryable = False
+
+
+class LineRangeInvalidError(FlosswingError):
+    code = "line_range_invalid"
+    retryable = False
+
+
+class DescriptionRequiredForConfirmedError(FlosswingError):
+    code = "description_required_for_confirmed"
+    retryable = False
+
+
+class DescriptionTooLargeError(FlosswingError):
+    code = "description_too_large"
+    retryable = False
+
+
+class SuggestedFixTooLargeError(FlosswingError):
+    code = "suggested_fix_too_large"
+    retryable = False
+
+
 # -----------------------------------------------------------------------------
 # Credential scrubber
 # -----------------------------------------------------------------------------

@@ -95,3 +95,33 @@ class AgentSession(Base):
     tool_calls_count: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[str] = mapped_column(Text)
     finished_at: Mapped[str] = mapped_column(Text)
+
+
+class Finding(Base):
+    __tablename__ = "findings"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
+    )
+    hunt_task_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("hunt_tasks.id", ondelete="CASCADE")
+    )
+    attack_class: Mapped[str] = mapped_column(Text)
+    file: Mapped[str] = mapped_column(Text)
+    function: Mapped[str | None] = mapped_column(Text)
+    line_start: Mapped[int] = mapped_column(Integer)
+    line_end: Mapped[int] = mapped_column(Integer)
+    severity: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="pending_validation")
+    title: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text)
+    poc_code: Mapped[str | None] = mapped_column(Text)
+    poc_result_json: Mapped[str | None] = mapped_column(Text)
+    suggested_fix: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    # Dedupe-managed columns (primary_finding_id, dedupe_cluster_id,
+    # dedupe_role, root_cause_summary, superseded_at) and Trace-managed
+    # (reachable) exist in the schema but are intentionally not mapped
+    # here — Hunt does not read or write them in v0.3.

@@ -85,7 +85,7 @@ async def run(*, run_id: str, cfg: Config) -> RunReconResult:
         system_prompt=system_prompt,
         tools=tools,
         user_prompt=_USER_PROMPT,
-        token_budget=cfg.token_budget,
+        token_budget=cfg.recon_token_budget,
         auth_env=cfg.auth_env,
         run_id=run_id,
         stage="recon",

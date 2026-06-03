@@ -1,7 +1,7 @@
-"""CLI / env config resolution for v0.2.
+"""CLI / env config resolution.
 
-Accepts any one of three auth modes (see
-docs/specs/2026-05-25-v0.2-recon-plumbing-design.md § Authentication):
+Accepts any one of three auth modes (per v0.2 § Authentication, unchanged
+in v0.3):
   A) ANTHROPIC_FOUNDRY_API_KEY (Foundry API key)
   B) az login session (Entra ID; signaled here by AZURE_* env vars)
   C) ANTHROPIC_API_KEY (direct Anthropic)
@@ -9,6 +9,10 @@ docs/specs/2026-05-25-v0.2-recon-plumbing-design.md § Authentication):
 Credential values are never logged or persisted. The full set of
 detected auth env vars is passed verbatim to ClaudeAgentOptions.env
 so the spawned subprocess can route however the CLI decides.
+
+v0.3 splits the single `token_budget` into per-stage budgets
+(`recon_token_budget`, `hunt_token_budget`) per design decision #1.
+No backward-compat alias for the old `token_budget` name.
 """
 
 from __future__ import annotations
@@ -20,7 +24,8 @@ from pathlib import Path
 from flosswing.errors import AuthCredentialMissingError
 
 DEFAULT_MODEL: str = "claude-opus-4-7"
-DEFAULT_TOKEN_BUDGET: int = 200_000
+DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
+DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
 
 _DIRECT_KEYS: tuple[str, ...] = ("ANTHROPIC_API_KEY",)
 _FOUNDRY_API_KEYS: tuple[str, ...] = (
@@ -38,7 +43,8 @@ _ENTRA_KEYS: tuple[str, ...] = (
 class Config:
     repo_root: Path
     model: str
-    token_budget: int
+    recon_token_budget: int
+    hunt_token_budget: int
     auth_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -50,7 +56,8 @@ def resolve(
     *,
     repo_root: Path,
     model: str | None,
-    token_budget: int | None,
+    recon_token_budget: int | None,
+    hunt_token_budget: int | None,
 ) -> Config:
     """Build a Config from CLI flags + env. Raises if no auth path."""
     auth_env: dict[str, str] = {}
@@ -74,6 +81,15 @@ def resolve(
     return Config(
         repo_root=repo_root,
         model=model or DEFAULT_MODEL,
-        token_budget=token_budget if token_budget is not None else DEFAULT_TOKEN_BUDGET,
+        recon_token_budget=(
+            recon_token_budget
+            if recon_token_budget is not None
+            else DEFAULT_RECON_TOKEN_BUDGET
+        ),
+        hunt_token_budget=(
+            hunt_token_budget
+            if hunt_token_budget is not None
+            else DEFAULT_HUNT_TOKEN_BUDGET
+        ),
         auth_env=auth_env,
     )
