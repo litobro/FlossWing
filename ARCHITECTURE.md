@@ -43,7 +43,8 @@ $ flosswing scan ./path/to/repo --depth standard
 
 1. Operator clones a target repo locally.
 2. Operator invokes `flosswing scan` from outside the target tree (FlossWing's state
-   lives in `<target>/.flosswing/`, gitignored by default).
+   lives in `~/.flosswing/`, separate from the target tree — the target repo is never
+   written to).
 3. FlossWing reads the target tree read-only, runs the pipeline, writes findings to its
    own state directory, generates a report.
 4. Operator reviews findings, triages, optionally drafts disclosures.
@@ -89,6 +90,14 @@ layout. It does **not** read every source file — that's Hunt's job.
 Tool allowlist: `read_file`, `list_dir`, `grep`, `record_recon_artifact`,
 `add_hunt_task`. No `compile_and_run`. No `record_finding`.
 
+**Symbol index build:** Recon's outputs (languages, build commands, recon artifact)
+feed a deterministic index-build phase that runs *between* Recon and Hunt in the
+orchestrator. The build parses in-scope files with tree-sitter and populates the
+`symbols`, `call_sites`, and `entry_points` tables for the current `run_id`. The
+build is not an agent stage — there is no `agent_sessions` row for it. See
+`docs/specs/2026-06-02-v0.5-symbol-index-design.md` and the cross-cutting
+§ Symbol index section below.
+
 **v1 attack class library** (Recon will only enqueue tasks for these):
 
 - Polyglot: `command_injection`, `path_traversal`, `ssrf`, `auth_bypass`,
@@ -123,6 +132,15 @@ the run (not per-stage). Token-per-task budget enforced by orchestrator with har
 Hunters can call `compile_and_run` to write and execute PoC code. All execution goes
 through the sandbox layer (see below). Network is disabled by default.
 
+> **v0.3 scope note (pending implementation):** The first Hunt plumbing milestone
+> registers only `read_file`, `list_dir`, `grep`, `record_finding`. `compile_and_run`
+> and symbol-lookup tools land with later milestones (v0.4 sandbox; v0.5 symbol
+> index). Until they do, Hunt findings carry `confidence` of `likely` or
+> `speculative` only — `confirmed` requires PoC execution or reachability trace,
+> neither of which is yet available. Sequential per-task execution; parallel
+> concurrency with `--budget` semaphore is its own milestone. See
+> `docs/specs/2026-06-02-v0.3-hunt-plumbing-design.md`.
+
 ### Stage 3: Validate — **v1**
 
 One agent per finding from Hunt, sequential or low-parallel (cap at 5 concurrent).
@@ -137,6 +155,16 @@ create new findings, only confirm or reject existing ones.
 Output verdicts: `CONFIRMED` | `REJECTED` | `UNCERTAIN`. UNCERTAIN findings flow
 through to Dedupe and Report tagged as such — operator decides.
 
+> **v0.6 scope note (pending implementation):** The first Validate plumbing
+> milestone registers only `read_file`, `list_dir`, `grep`, `query_findings`,
+> `validate_finding`. `compile_and_run` lands with the sandbox milestone (v0.4);
+> symbol-lookup tools land with the symbol-index milestone (v0.5). Until both
+> land, Validators reason from source only — `verdict='confirmed'` carries weaker
+> evidentiary weight than the v1 design intends, and the Validate system prompt
+> is explicit about this. Sequential per-finding execution; the 5-concurrent cap
+> is deferred to its own milestone. Default per-session budget: 100k input
+> tokens. See `docs/specs/2026-06-02-v0.6-validate-design.md`.
+
 ### Stage 4: Gapfill — **v1**
 
 One agent, sequential. Reads the Recon architecture doc and the full Hunt task log.
@@ -148,6 +176,12 @@ queue. Gapfill runs **once** per run; no recursive expansion in v1.
 
 Tool allowlist: `query_run_state` (read-only over the SQLite state), `add_hunt_task`.
 
+> **v0.7 scope note (pending implementation):** The first Gapfill plumbing
+> milestone queues new Hunt tasks but does **not** auto-trigger a second Hunt
+> pass against them within the same run. Newly queued tasks sit in
+> `status='pending'` for the operator's next invocation; auto-re-pass is a
+> follow-on milestone. See `docs/specs/2026-06-02-v0.7-gapfill-design.md`.
+
 ### Stage 5: Dedupe — **v1**
 
 Two-pass:
@@ -158,6 +192,16 @@ Two-pass:
    share a root cause. Merges duplicates into a primary finding with linked variants.
 
 Tool allowlist: `query_findings`, `merge_findings`, `link_variant`.
+
+> **v0.8 scope note (pending implementation):** The first Dedupe plumbing
+> milestone registers `query_findings`, `merge_findings`, `link_variant` only.
+> The scope matrix in `docs/tool-contracts.md` lists `read_file` under Dedupe;
+> this stage description's allowlist is authoritative, and the matrix cell is
+> flagged for operator resolution. Pass 1 and Pass 2 run as separate
+> transactions; if the process dies mid-Pass-2 the run is not resumable (new
+> `run_id` required). Singleton clusters get a `dedupe_clusters` row but no
+> agent session. Sequential per-cluster execution; parallel dedupe is its own
+> milestone. See `docs/specs/2026-06-02-v0.8-dedupe-design.md`.
 
 ### Stage 6: Trace — **v1 (in-repo only)**
 
@@ -174,6 +218,16 @@ dependencies. If a call chain leaves the repo's source tree, mark `uncertain` an
 
 Tool allowlist: `read_file`, `find_callers`, `find_definition`, `query_entry_points`,
 `record_trace`.
+
+> **v0.9 scope note (pending implementation):** The first Trace plumbing
+> milestone registers `read_file`, `list_dir`, `grep`, `find_definition`,
+> `find_callers`, `query_entry_points`, `query_findings`, `record_trace`. The
+> Tracer walks backwards from the bug site only; forward traces are deferred.
+> Vendored directories (`vendor/`, `node_modules/`, `third_party/`, etc.) are
+> treated as out-of-repo for the "leaves the repo's source tree" rule even when
+> they sit inside the working tree. Walk depth is capped (default 8 hops) via
+> `--trace-max-depth`; cap-exceeded walks emit `uncertain`. Sequential
+> per-finding execution. See `docs/specs/2026-06-02-v0.9-trace-design.md`.
 
 ### Stage 7: Feedback — **DEFERRED to v2**
 
@@ -195,6 +249,25 @@ Deterministic. No agent. Reads the SQLite state and renders:
 
 All output goes to `~/.flosswing/runs/<run_id>/output/`. Operator copies what they want
 out manually.
+
+> **v1.0 scope note (pending implementation):** v1.0 ships `report.md`,
+> `report.json`, and per-finding directories. The `--format sarif` flag is
+> accepted in v1.0 (so existing CI configurations don't break) but emits a
+> placeholder JSON containing only a header comment. Real SARIF 2.1.0 output,
+> hand-rolled without an additional dependency, is targeted for v1.1. See
+> `docs/specs/2026-06-02-v1.0-report-design.md`.
+
+## Symbol index
+
+The symbol index is built once per scan by a deterministic phase that runs between
+Recon and Hunt. It populates three tables — `symbols`, `call_sites`, `entry_points` —
+all scoped by `run_id`. The index is not incremental across runs; each scan rebuilds
+it. Tree-sitter handles the parsing. Languages supported in v1 match the v1 scope
+summary list (C, C++, Rust, Go, Python, JavaScript/TypeScript, Java). The
+agent-facing tools that read the index are `find_definition`, `find_callers`, and
+`query_entry_points`, all under § Scope: symbols in `docs/tool-contracts.md`. Build
+behaviour, failure modes, and entry-point heuristics are documented in
+`docs/specs/2026-06-02-v0.5-symbol-index-design.md`.
 
 ## Component layout
 
@@ -359,6 +432,20 @@ shell or arbitrary `bash` access.
 **Firejail fallback** for environments without Docker. Same constraints, different
 mechanism. If neither Docker nor Firejail is available, `compile_and_run` returns an
 error and the run continues without PoC execution (degrading gracefully).
+
+> **v0.4 scope note (pending implementation):** The first sandbox plumbing
+> milestone ships both Docker (primary) and Firejail (fallback) backends,
+> enforces the prescriptive constraints above verbatim, and selects between
+> backends via auto-detection (Docker → else Firejail → else `sandbox_unavailable`).
+> Hunt and Validate do **not** gain the `compile_and_run` tool in v0.4 — wiring
+> the tool into their scopes is a follow-on milestone that consumes this layer.
+> Deferred to later milestones: libFuzzer/AFL integration, seccomp / AppArmor /
+> SELinux profiles, pre-built language images, image-digest pinning, SBOM
+> emission, and the SSRF controlled-loopback HTTP fixture. None of these
+> weaken the constraints above; all are additive hardening or ergonomics.
+> Firejail caveat: per-language filesystem images are a Docker-only feature; on
+> Firejail-only hosts, the host must have the required language toolchain
+> installed. See `docs/specs/2026-06-02-v0.4-sandbox-design.md`.
 
 ## Threat model summary
 
