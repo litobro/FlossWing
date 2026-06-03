@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from flosswing.config import Config
+from flosswing.config import DEFAULT_MODEL, Config
 from flosswing.orchestrator import run_scan
 from flosswing.state import session as st_session
 from flosswing.state.models import CallSite, Symbol
@@ -46,18 +46,27 @@ CORPUS_REPO = Path(__file__).parent.parent / "corpus" / "v02_smoke"
 
 
 def _resolve_auth_env() -> dict[str, str]:
-    """Pick up whichever auth mode the operator has configured."""
-    out: dict[str, str] = {}
-    for key in (
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_FOUNDRY_API_KEY",
-        "AZURE_CLIENT_ID",
-        "AZURE_TENANT_ID",
-    ):
-        v = os.environ.get(key)
-        if v:
-            out[key] = v
-    return out
+    """Pick up whichever auth mode the operator has configured.
+
+    Delegates to flosswing.config.resolve() so the test gate matches
+    production semantics exactly. Returns an empty dict if no auth
+    path is available — the calling test then skips.
+    """
+    from pathlib import Path as _Path
+
+    from flosswing import config as _cfg
+    from flosswing.errors import AuthCredentialMissingError as _AuthMissing
+
+    try:
+        c = _cfg.resolve(
+            repo_root=_Path("."),
+            model=None,
+            recon_token_budget=None,
+            hunt_token_budget=None,
+        )
+    except _AuthMissing:
+        return {}
+    return dict(c.auth_env)
 
 
 @pytest.mark.asyncio
@@ -77,16 +86,17 @@ async def test_symbol_index_smoke_runs_recon_index_hunt_against_v02_smoke(
 
     cfg = Config(
         repo_root=CORPUS_REPO.resolve(),
-        model="claude-sonnet-4-5",
+        model=DEFAULT_MODEL,
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
         auth_env=auth,
     )
     result = await run_scan(cfg)
+    print("\n--- run summary ---\n" + result.summary + "\n---")
     assert result.exit_code in (0, 1), (
         f"unexpected exit_code {result.exit_code}; summary={result.summary}"
     )
-    # Find the run row in the state DB.
+    # Snapshot attributes inside the scope; ORM instances expire on commit.
     with st_session.session_scope() as s:
         symbols = list(
             s.execute(
@@ -95,32 +105,40 @@ async def test_symbol_index_smoke_runs_recon_index_hunt_against_v02_smoke(
             .scalars()
             .all()
         )
-    names = {sym.symbol for sym in symbols}
-    assert "greet" in names, f"index missing greet: {sorted(names)}"
+        snapshots: list[tuple[str, str, str, str, str]] = [
+            (sym.id, sym.symbol, sym.file, sym.kind, sym.language)
+            for sym in symbols
+        ]
+    names = {snap[1] for snap in snapshots}
+    assert "greet" in names, (
+        f"index missing greet: {sorted(names)}\nsummary:\n{result.summary}"
+    )
     assert "main" in names, f"index missing main: {sorted(names)}"
 
-    greet = next(sym for sym in symbols if sym.symbol == "greet")
-    assert greet.file == "src/example/cli.py"
-    assert greet.kind == "function"
-    assert greet.language == "python"
+    greet = next(snap for snap in snapshots if snap[1] == "greet")
+    assert greet[2] == "src/example/cli.py"
+    assert greet[3] == "function"
+    assert greet[4] == "python"
 
-    main = next(sym for sym in symbols if sym.symbol == "main")
-    assert main.file == "src/example/cli.py"
-    assert main.kind == "function"
+    main = next(snap for snap in snapshots if snap[1] == "main")
+    assert main[2] == "src/example/cli.py"
+    assert main[3] == "function"
 
+    greet_id, main_id = greet[0], main[0]
     with st_session.session_scope() as s:
-        edges = list(
-            s.execute(
+        edge_pairs = [
+            (e.caller_symbol_id, e.callee_symbol_id)
+            for e in s.execute(
                 select(CallSite).where(
                     CallSite.run_id == result.run_id,
-                    CallSite.callee_symbol_id == greet.id,
+                    CallSite.callee_symbol_id == greet_id,
                 )
             )
             .scalars()
             .all()
-        )
-    assert len(edges) >= 1, "main -> greet call edge not resolved"
-    assert any(e.caller_symbol_id == main.id for e in edges)
+        ]
+    assert len(edge_pairs) >= 1, "main -> greet call edge not resolved"
+    assert any(caller == main_id for caller, _ in edge_pairs)
 
 
 @pytest.mark.asyncio
@@ -144,7 +162,7 @@ async def test_find_definition_returns_greet_via_tool(
     monkeypatch.setenv("HOME", str(tmp_path))
     cfg = Config(
         repo_root=CORPUS_REPO.resolve(),
-        model="claude-sonnet-4-5",
+        model=DEFAULT_MODEL,
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
         auth_env=auth,

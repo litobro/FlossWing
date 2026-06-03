@@ -160,19 +160,20 @@ async def run_scan(cfg: Config) -> ScanResult:
 
     # Build the summary string. Per spec § Success criteria #3:
     # per-task lines from hunt_tasks + a roll-up footer.
+    # Snapshot row attributes inside the session scope; ORM instances
+    # are expired once session_scope() commits and exits.
+    task_lines: list[str] = []
     with st_session.session_scope() as s:
         task_rows = list(
             s.execute(select(HuntTask).where(HuntTask.run_id == run_id))
             .scalars()
             .all()
         )
-
-    task_lines: list[str] = []
-    for t in task_rows:
-        task_lines.append(
-            f"  - {t.attack_class} {t.scope_hint} -> {t.status}, "
-            f"{t.findings_count} findings"
-        )
+        for t in task_rows:
+            task_lines.append(
+                f"  - {t.attack_class} {t.scope_hint} -> {t.status}, "
+                f"{t.findings_count} findings"
+            )
 
     summary_lines = [
         f"Run {run_id} {final_status}.",
