@@ -387,3 +387,86 @@ def test_attack_class_fragment_loader_returns_seeded_class() -> None:
 def test_attack_class_fragment_loader_falls_back_for_unknown() -> None:
     text = hunt._load_attack_class_fragment("buffer_overflow")
     assert "speculative" in text.lower()
+
+
+def test_hunt_tool_registration_includes_symbol_tools(tmp_path: Path) -> None:
+    """Per docs/specs/2026-06-02-v0.5-symbol-index-design.md § Tool scoping:
+    Hunt's tool list gains find_definition + find_callers in v0.5.
+    """
+    from flosswing.stages.hunt import _build_hunt_tools
+
+    tools = _build_hunt_tools(
+        repo_root=tmp_path, run_id="01RUN", hunt_task_id="01TASK"
+    )
+    tool_names = {getattr(t, "name", None) or t.__name__ for t in tools}
+    assert "read_file" in tool_names
+    assert "list_dir" in tool_names
+    assert "grep" in tool_names
+    assert "record_finding" in tool_names
+    assert "find_definition" in tool_names
+    assert "find_callers" in tool_names
+    # query_entry_points is Trace-only — NOT registered in Hunt.
+    assert "query_entry_points" not in tool_names
+    assert len(tools) == 6
+
+
+@pytest.mark.asyncio
+async def test_hunt_find_definition_tool_returns_ok_for_known_symbol(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flosswing.stages.hunt import _build_hunt_tools
+    from flosswing.state.models import Symbol
+
+    monkeypatch.setenv("FLOSSWING_DB_URL", f"sqlite:///{tmp_path}/state.db")
+    st_session._cached_engine = None  # type: ignore[attr-defined]
+    st_session._cached_session_factory = None  # type: ignore[attr-defined]
+
+    run_id = str(ULID())
+    with st_session.session_scope() as s:
+        s.add(
+            Run(
+                id=run_id,
+                target_repo_path=str(tmp_path),
+                target_repo_sha=None,
+                depth="standard",
+                budget_total=20,
+                budget_used=0,
+                started_at="2026-06-02T00:00:00Z",
+                status="running",
+                config_json="{}",
+                flosswing_version="0.5.0",
+            )
+        )
+        s.flush()
+        s.add(
+            Symbol(
+                id=str(ULID()),
+                run_id=run_id,
+                symbol="greet",
+                fully_qualified_name="src.cli.greet",
+                file="src/cli.py",
+                line_start=10,
+                line_end=12,
+                kind="function",
+                language="python",
+            )
+        )
+
+    tools = _build_hunt_tools(
+        repo_root=tmp_path, run_id=run_id, hunt_task_id="01TASK"
+    )
+    find_def_tool = next(
+        t
+        for t in tools
+        if (getattr(t, "name", None) or getattr(t, "__name__", ""))
+        == "find_definition"
+    )
+    out = await find_def_tool.handler({"symbol": "greet"})
+    assert out.get("is_error") is not True
+    text = out["content"][0]["text"]
+    assert "greet" in text
+    assert "src/cli.py" in text
+
+    st_session._cached_engine = None  # type: ignore[attr-defined]
+    st_session._cached_session_factory = None  # type: ignore[attr-defined]

@@ -24,7 +24,7 @@ Recon already identified the scope and queued this task for you.
    or more times. Zero findings is a valid outcome if you don't
    observe an instance of the bug class.
 
-## Available tools (v0.3)
+## Available tools (v0.5)
 
 - **`read_file(path, start_line?, end_line?)`** — read a file or
   line range from the repo. Repo-relative POSIX paths.
@@ -36,10 +36,26 @@ Recon already identified the scope and queued this task for you.
   line_end, severity, confidence, title, description, poc_code?,
   suggested_fix?)`** — record a vulnerability finding. Call once
   per finding. Recording zero findings is valid.
+- **`find_definition(symbol, file_hint?, language?)`** — locate a
+  symbol's definition in the index. Returns 0..N `SymbolDefinition`
+  rows. `file_hint` and `language` narrow the search.
+- **`find_callers(symbol, file_hint?, language?, max_results?)`** —
+  list call sites of a symbol. Returns `symbol_not_found` if unknown,
+  `ambiguous_symbol` (with candidate locations) if multiple definitions
+  match — retry with `file_hint` to disambiguate.
 
-`compile_and_run` and the symbol-lookup tools (`find_definition`,
-`find_callers`) **are not available in this milestone**. Do not
-attempt to call them. Do not fabricate execution results.
+`compile_and_run` is not available in this milestone (lands with a later
+sandbox-wiring task — Hunt cannot execute PoCs in v0.5). Do not attempt
+to call it. Do not fabricate execution results.
+
+The symbol-lookup tools `find_definition` and `find_callers` ARE
+available in this milestone (v0.5) — the symbol index is built
+between Recon and Hunt and is ready when you start. Use them to
+navigate from a callsite to a callee's definition, or from a function
+to its callers, before deciding whether a sink is reachable.
+
+`query_entry_points` is implemented but not exposed to Hunt — it
+lights up when the Trace stage lands. Do not attempt to call it.
 
 ## Confidence — hard cap
 
