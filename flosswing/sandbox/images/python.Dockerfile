@@ -3,7 +3,7 @@
 # Per docs/specs/2026-06-02-v0.4-sandbox-design.md § Design decisions #1/#4.
 # Sha256 below is a placeholder.
 
-FROM python:3.11-slim-bookworm@sha256:0000000000000000000000000000000000000000000000000000000000000000
+FROM python:3.11-slim-bookworm@sha256:8dca233de9f3d9bb410665f00a4da6dd06f331083137e0e98ccf227236fcc438
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

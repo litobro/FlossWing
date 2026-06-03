@@ -3,7 +3,7 @@
 # Per docs/specs/2026-06-02-v0.4-sandbox-design.md § Design decisions #1/#4.
 # Sha256 below is a placeholder.
 
-FROM golang:1.22-bookworm@sha256:0000000000000000000000000000000000000000000000000000000000000000
+FROM golang:1.22-bookworm@sha256:3d699e4d15d0f8f13c9195c0632a16702b8cbdece2955af1c23b37ae5d55a253
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -3,7 +3,7 @@
 # Per docs/specs/2026-06-02-v0.4-sandbox-design.md § Design decisions #1/#4.
 # Sha256 below is a placeholder — update via `docker pull debian:12-slim` on first build.
 
-FROM debian:12-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000
+FROM debian:12-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

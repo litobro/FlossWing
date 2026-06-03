@@ -9,7 +9,7 @@
 #   docker images --digests debian:12-slim
 # then paste the actual digest below.
 
-FROM debian:12-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000
+FROM debian:12-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

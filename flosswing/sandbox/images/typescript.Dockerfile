@@ -3,7 +3,7 @@
 # Per docs/specs/2026-06-02-v0.4-sandbox-design.md § Design decisions #1/#4.
 # Sha256 below is a placeholder.
 
-FROM node:20-bookworm-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
