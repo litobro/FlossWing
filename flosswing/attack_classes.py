@@ -17,6 +17,12 @@ from flosswing.errors import InvalidAttackClassError
 class AttackClassMeta:
     name: str
     language_scope: str  # 'polyglot' | 'c_family' | 'web' | 'go' | 'rust'
+    # v0.4 — sandbox network policy. Default-False/False preserves v0.2/v0.3
+    # behaviour (no class permits network). Per
+    # docs/specs/2026-06-02-v0.4-sandbox-design.md § Component
+    # responsibilities sandbox/policy.py.
+    network_default: bool = False
+    network_permitted: bool = False
 
 
 def _entry(name: str, scope: str) -> tuple[str, AttackClassMeta]:
@@ -34,7 +40,12 @@ REGISTRY: Final[dict[str, AttackClassMeta]] = dict(
         # Polyglot
         _entry("command_injection", "polyglot"),
         _entry("path_traversal", "polyglot"),
-        _entry("ssrf", "polyglot"),
+        ("ssrf", AttackClassMeta(
+            name="ssrf",
+            language_scope="polyglot",
+            network_default=False,
+            network_permitted=True,
+        )),
         _entry("auth_bypass", "polyglot"),
         _entry("hardcoded_secrets", "polyglot"),
         _entry("insecure_deserialization", "polyglot"),
