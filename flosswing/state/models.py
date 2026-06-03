@@ -125,3 +125,67 @@ class Finding(Base):
     # dedupe_role, root_cause_summary, superseded_at) and Trace-managed
     # (reachable) exist in the schema but are intentionally not mapped
     # here — Hunt does not read or write them in v0.3.
+
+
+# -----------------------------------------------------------------------------
+# v0.5 symbol-index models (per docs/specs/2026-06-02-v0.5-symbol-index-design.md
+# § SQLAlchemy models). Tables already exist in 001_initial; v0.5 only adds
+# models. CHECK constraints (ck_symbols_kind, ck_symbols_lines,
+# ck_call_sites_line, ck_entry_points_kind, ck_entry_points_attacker_input,
+# ck_entry_points_line) are enforced server-side by SQLite and not duplicated
+# in Python.
+# -----------------------------------------------------------------------------
+
+
+class Symbol(Base):
+    __tablename__ = "symbols"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
+    )
+    symbol: Mapped[str] = mapped_column(Text)
+    fully_qualified_name: Mapped[str] = mapped_column(Text)
+    file: Mapped[str] = mapped_column(Text)
+    line_start: Mapped[int] = mapped_column(Integer)
+    line_end: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(Text)
+    language: Mapped[str] = mapped_column(Text)
+
+
+class CallSite(Base):
+    __tablename__ = "call_sites"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
+    )
+    caller_symbol_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("symbols.id", ondelete="CASCADE")
+    )
+    callee_symbol_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("symbols.id", ondelete="SET NULL"), nullable=True
+    )
+    callee_text: Mapped[str] = mapped_column(Text)
+    file: Mapped[str] = mapped_column(Text)
+    line: Mapped[int] = mapped_column(Integer)
+    snippet: Mapped[str] = mapped_column(Text)
+
+
+class EntryPoint(Base):
+    __tablename__ = "entry_points"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    recon_artifact_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("recon_artifacts.id", ondelete="CASCADE")
+    )
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
+    )
+    symbol: Mapped[str] = mapped_column(Text)
+    file: Mapped[str] = mapped_column(Text)
+    line: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(Text)
+    # 0 | 1 — cast to bool in the tool layer per § Component responsibilities.
+    attacker_controlled_input: Mapped[int] = mapped_column(Integer)
+    notes: Mapped[str] = mapped_column(Text, default="")
