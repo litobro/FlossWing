@@ -11,16 +11,24 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from sqlalchemy import select
 from ulid import ULID
 
 from flosswing import attack_classes
-from flosswing.errors import ReconAlreadyRecordedError
+from flosswing.errors import (
+    DescriptionRequiredForConfirmedError,
+    DescriptionTooLargeError,
+    LineRangeInvalidError,
+    PathNotInRepoError,
+    ReconAlreadyRecordedError,
+    SuggestedFixTooLargeError,
+)
 from flosswing.state import session as st_session
-from flosswing.state.models import HuntTask, ReconArtifact
+from flosswing.state.models import Finding, HuntTask, ReconArtifact
 
 # -----------------------------------------------------------------------------
 # record_recon_artifact
@@ -155,3 +163,121 @@ def add_hunt_task(
         )
 
     return AddHuntTaskOutput(task_id=task_id, accepted=True, reason=None)
+
+
+# -----------------------------------------------------------------------------
+# record_finding  (per docs/tool-contracts.md § findings (Hunt-side))
+# -----------------------------------------------------------------------------
+
+
+# Application-layer size caps (the findings table has no column-side cap;
+# we mirror the fs.py read-size shape — 64 KB per blob).
+_FINDING_TEXT_CAP_BYTES: int = 64 * 1024
+
+
+class RecordFindingInput(BaseModel):
+    attack_class: str
+    file: str
+    function: str | None = None
+    line_start: int
+    line_end: int
+    severity: Literal["critical", "high", "medium", "low", "info"]
+    confidence: Literal["confirmed", "likely", "speculative"]
+    title: str
+    description: str
+    poc_code: str | None = None
+    # poc_result is part of the contract signature but unreachable in v0.3
+    # (no compile_and_run yet). Accept it as opaque dict so the contract
+    # stays frozen; we serialize to JSON if present.
+    poc_result: dict[str, Any] | None = None
+    suggested_fix: str | None = None
+    related_findings: list[str] = []
+
+
+class RecordFindingOutput(BaseModel):
+    finding_id: str
+    duplicate_of: str | None = None
+
+
+def _resolve_inside_repo_str(rel: str, repo_root: Path) -> None:
+    """Raise PathNotInRepoError if rel doesn't resolve inside repo_root."""
+    if Path(rel).is_absolute():
+        raise PathNotInRepoError(f"path escapes repo root: {rel}")
+    candidate = (repo_root / rel).resolve(strict=False)
+    try:
+        candidate.relative_to(repo_root.resolve(strict=False))
+    except ValueError as e:
+        raise PathNotInRepoError(f"path escapes repo root: {rel}") from e
+
+
+def record_finding(
+    inp: RecordFindingInput,
+    *,
+    run_id: str,
+    hunt_task_id: str,
+    repo_root: Path,
+) -> RecordFindingOutput:
+    """Record a Hunt finding. See docs/tool-contracts.md § findings (Hunt-side)."""
+    attack_classes.validate(inp.attack_class)
+    _resolve_inside_repo_str(inp.file, repo_root)
+
+    if inp.line_start < 1 or inp.line_end < inp.line_start:
+        raise LineRangeInvalidError(
+            f"line_range_invalid: start={inp.line_start} end={inp.line_end}"
+        )
+
+    if inp.confidence == "confirmed" and (
+        not inp.description.strip()
+        or (inp.poc_code is None and inp.poc_result is None)
+    ):
+        raise DescriptionRequiredForConfirmedError(
+            "confidence='confirmed' requires a non-empty description AND "
+            "either a poc_code or a poc_result. In v0.3, compile_and_run "
+            "is not yet available, so use confidence='likely' or "
+            "'speculative' instead."
+        )
+
+    if len(inp.description.encode("utf-8")) > _FINDING_TEXT_CAP_BYTES:
+        raise DescriptionTooLargeError(
+            f"description exceeds {_FINDING_TEXT_CAP_BYTES} bytes"
+        )
+    if (
+        inp.suggested_fix is not None
+        and len(inp.suggested_fix.encode("utf-8")) > _FINDING_TEXT_CAP_BYTES
+    ):
+        raise SuggestedFixTooLargeError(
+            f"suggested_fix exceeds {_FINDING_TEXT_CAP_BYTES} bytes"
+        )
+
+    finding_id = str(ULID())
+    with st_session.session_scope() as s:
+        s.add(
+            Finding(
+                id=finding_id,
+                run_id=run_id,
+                hunt_task_id=hunt_task_id,
+                attack_class=inp.attack_class,
+                file=inp.file,
+                function=inp.function,
+                line_start=inp.line_start,
+                line_end=inp.line_end,
+                severity=inp.severity,
+                confidence=inp.confidence,
+                status="pending_validation",
+                title=inp.title,
+                description=inp.description,
+                poc_code=inp.poc_code,
+                poc_result_json=(
+                    json.dumps(inp.poc_result, sort_keys=True)
+                    if inp.poc_result is not None
+                    else None
+                ),
+                suggested_fix=inp.suggested_fix,
+                created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            )
+        )
+        task = s.get(HuntTask, hunt_task_id)
+        if task is not None:
+            task.findings_count = (task.findings_count or 0) + 1
+
+    return RecordFindingOutput(finding_id=finding_id, duplicate_of=None)
