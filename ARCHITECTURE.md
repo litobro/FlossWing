@@ -156,14 +156,16 @@ Output verdicts: `CONFIRMED` | `REJECTED` | `UNCERTAIN`. UNCERTAIN findings flow
 through to Dedupe and Report tagged as such — operator decides.
 
 > **v0.6 scope note (pending implementation):** The first Validate plumbing
-> milestone registers only `read_file`, `list_dir`, `grep`, `query_findings`,
-> `validate_finding`. `compile_and_run` lands with the sandbox milestone (v0.4);
-> symbol-lookup tools land with the symbol-index milestone (v0.5). Until both
-> land, Validators reason from source only — `verdict='confirmed'` carries weaker
-> evidentiary weight than the v1 design intends, and the Validate system prompt
-> is explicit about this. Sequential per-finding execution; the 5-concurrent cap
-> is deferred to its own milestone. Default per-session budget: 100k input
-> tokens. See `docs/specs/2026-06-02-v0.6-validate-design.md`.
+> milestone registers the full per-matrix tool set: `read_file`, `list_dir`,
+> `grep`, `find_definition`, `find_callers`, `compile_and_run`,
+> `query_findings`, `validate_finding` — eight tools, matching
+> `docs/tool-contracts.md` § Tool scope matrix. Both prerequisite milestones
+> (v0.4 sandbox, v0.5 symbol index) have shipped, so Validators can run PoCs
+> to confirm/reject and walk the symbol index for reachability evidence from
+> day one. Sequential per-finding execution; the ARCH-authorised cap of 5
+> concurrent sessions is deferred to its own milestone, likely paired with
+> Hunt parallelism. Default per-session budget: 100k input tokens. See
+> `docs/specs/2026-06-02-v0.6-validate-design.md`.
 
 ### Stage 4: Gapfill — **v1**
 
