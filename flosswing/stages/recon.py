@@ -11,7 +11,8 @@ responsibilities.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,6 +46,13 @@ class RunReconResult:
     cost_usd: float
     refusal_text: str | None
     error_text: str | None
+    # v0.5: surfaced for IndexBuild wiring. `recon_artifact_id` is the row
+    # id of the just-recorded recon_artifacts row (None if Recon did not
+    # record one); `languages` is the set parsed from that row's
+    # `languages_json`. Both are consumed by the orchestrator to drive the
+    # IndexBuild stage between Recon and Hunt.
+    recon_artifact_id: str | None = None
+    languages: set[str] = field(default_factory=set)
 
 
 def _now_iso() -> str:
@@ -123,28 +131,51 @@ async def run(*, run_id: str, cfg: Config) -> RunReconResult:
             )
         )
 
+    # v0.5: pull artifact_id + languages so the orchestrator can drive
+    # IndexBuild without re-querying. Recon may record zero or one
+    # artifact in v0.2; we surface the first (and warn nothing about
+    # the rest because the contract guarantees ≤1). All ORM attribute
+    # reads must happen inside the session scope to avoid
+    # DetachedInstanceError after the scope closes.
+    artifact_id: str | None = None
+    languages: set[str] = set()
+    artifact_count = 0
     with st_session.session_scope() as s:
-        artifact_count = (
+        artifact_rows = list(
             s.execute(select(ReconArtifact).where(ReconArtifact.run_id == run_id))
             .scalars()
             .all()
         )
-        tasks_count = (
-            s.execute(select(HuntTask).where(HuntTask.run_id == run_id))
-            .scalars()
-            .all()
+        artifact_count = len(artifact_rows)
+        if artifact_rows:
+            artifact_id = artifact_rows[0].id
+            langs_json = artifact_rows[0].languages_json
+            try:
+                parsed = json.loads(langs_json)
+            except (json.JSONDecodeError, TypeError):
+                parsed = []
+            if isinstance(parsed, list):
+                languages = {str(x) for x in parsed if isinstance(x, str)}
+        tasks_count = len(
+            list(
+                s.execute(select(HuntTask).where(HuntTask.run_id == run_id))
+                .scalars()
+                .all()
+            )
         )
 
     return RunReconResult(
         outcome=result.outcome,
-        recon_artifact_recorded=len(artifact_count) >= 1,
-        hunt_tasks_queued=len(tasks_count),
+        recon_artifact_recorded=artifact_count >= 1,
+        hunt_tasks_queued=tasks_count,
         agent_session_id=session_id,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_usd=cost,
         refusal_text=result.refusal_text,
         error_text=result.error_text,
+        recon_artifact_id=artifact_id,
+        languages=languages,
     )
 
 

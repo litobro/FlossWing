@@ -246,3 +246,161 @@ def test_budget_used_aggregates_recon_and_hunt_tokens(
         assert len(runs) == 1
         # 1000 + 200 (recon) + 5000 + 400 (hunt) = 6600
         assert runs[0].budget_used == 6600
+
+
+# ---------------------------------------------------------------------------
+# v0.5 IndexBuild wiring — orchestrator must call stages.index_build.run
+# between Recon and Hunt when Recon completes with a recorded artifact and
+# >=1 queued task. Empty index (symbols == 0) finalizes the run as `errored`
+# and Hunt does NOT start. Per
+# docs/specs/2026-06-02-v0.5-symbol-index-design.md § IndexBuild placement.
+# ---------------------------------------------------------------------------
+
+
+def _recon_with_index(
+    *,
+    artifact_id: str = "01ARTIFACT",
+    languages: set[str] | None = None,
+) -> RunReconResult:
+    """Recon result shaped for v0.5: carries artifact_id + languages."""
+    return RunReconResult(
+        outcome="completed",
+        recon_artifact_recorded=True,
+        hunt_tasks_queued=1,
+        agent_session_id="x",
+        input_tokens=0,
+        output_tokens=0,
+        cost_usd=0.0,
+        refusal_text=None,
+        error_text=None,
+        recon_artifact_id=artifact_id,
+        languages=languages if languages is not None else {"python"},
+    )
+
+
+def test_orchestrator_runs_index_build_between_recon_and_hunt(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IndexBuild must run after Recon and before Hunt when artifact_id set."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+
+    call_order: list[str] = []
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        call_order.append("recon")
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        call_order.append("index_build")
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        call_order.append("hunt")
+        return _hunt(processed=1, succeeded=1, findings=1)
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert call_order == ["recon", "index_build", "hunt"]
+    assert result.exit_code == 0
+    # Summary surfaces the index block (per the spec § Component
+    # responsibilities orchestrator.run_scan extension).
+    assert "index:" in result.summary
+    assert "symbols:" in result.summary
+
+
+def test_orchestrator_finalizes_errored_on_empty_index(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """symbols == 0 finalizes the run as errored; Hunt must NOT start."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+
+    hunt_called = False
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=0,
+            call_sites=0,
+            entry_points=0,
+            files_parsed=0,
+            files_skipped=0,
+            duration_ms=5,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        nonlocal hunt_called
+        hunt_called = True
+        return _hunt()
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert result.exit_code == 1
+    assert hunt_called is False, "Hunt must NOT start when index empty"
+    assert "index_build_empty" in result.summary
+    with st_session.session_scope() as s:
+        assert s.query(Run).all()[0].status == "errored"
+
+
+def test_orchestrator_skips_index_build_when_recon_artifact_id_missing(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If Recon recorded no artifact_id, IndexBuild is skipped entirely.
+
+    The pre-IndexBuild short-circuit paths (recon errored, zero tasks)
+    must not invoke the stage and must not crash the summary's index
+    block (which uses `index_result is None` to print zeros).
+    """
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+
+    index_called = False
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon(outcome="errored", artifact=False, tasks_queued=0)
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        nonlocal index_called
+        index_called = True
+        return IndexBuildResult()
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt()
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert index_called is False
+    assert result.exit_code == 1
+    # Summary should still render the index block with zeros.
+    assert "index:" in result.summary
+    assert "symbols:           0" in result.summary
