@@ -13,7 +13,9 @@ from ulid import ULID
 
 from flosswing import __version__
 from flosswing.config import Config
+from flosswing.index.build import IndexBuildResult
 from flosswing.stages import hunt as hunt_stage
+from flosswing.stages import index_build as index_build_stage
 from flosswing.stages import recon as recon_stage
 from flosswing.state import session as st_session
 from flosswing.state.models import HuntTask, Run
@@ -93,6 +95,27 @@ async def run_scan(cfg: Config) -> ScanResult:
         and recon_result.recon_artifact_recorded
         and recon_result.hunt_tasks_queued >= 1
     )
+
+    # v0.5: IndexBuild phase runs between Recon and Hunt. Per
+    # docs/specs/2026-06-02-v0.5-symbol-index-design.md § IndexBuild
+    # placement. The phase is deterministic — no agent_sessions row.
+    # On empty result (symbols == 0) the run finalizes as `errored`
+    # and Hunt does NOT start (design decision #7).
+    index_result: IndexBuildResult | None = None
+    index_empty = False
+    if recon_ok and recon_result.recon_artifact_id is not None:
+        index_result = await index_build_stage.run(
+            run_id=run_id,
+            recon_artifact_id=recon_result.recon_artifact_id,
+            repo=cfg.repo_root,
+            languages=set(recon_result.languages),
+            cfg=cfg,
+            session_factory=st_session.session_factory(),
+        )
+        if index_result.symbols == 0:
+            index_empty = True
+            recon_ok = False  # short-circuit Hunt below
+
     if recon_ok:
         hunt_result = await hunt_stage.run(
             run_id=run_id,
@@ -137,19 +160,20 @@ async def run_scan(cfg: Config) -> ScanResult:
 
     # Build the summary string. Per spec § Success criteria #3:
     # per-task lines from hunt_tasks + a roll-up footer.
+    # Snapshot row attributes inside the session scope; ORM instances
+    # are expired once session_scope() commits and exits.
+    task_lines: list[str] = []
     with st_session.session_scope() as s:
         task_rows = list(
             s.execute(select(HuntTask).where(HuntTask.run_id == run_id))
             .scalars()
             .all()
         )
-
-    task_lines: list[str] = []
-    for t in task_rows:
-        task_lines.append(
-            f"  - {t.attack_class} {t.scope_hint} -> {t.status}, "
-            f"{t.findings_count} findings"
-        )
+        for t in task_rows:
+            task_lines.append(
+                f"  - {t.attack_class} {t.scope_hint} -> {t.status}, "
+                f"{t.findings_count} findings"
+            )
 
     summary_lines = [
         f"Run {run_id} {final_status}.",
@@ -161,6 +185,13 @@ async def run_scan(cfg: Config) -> ScanResult:
             f"{'recorded' if recon_result.recon_artifact_recorded else 'NOT recorded'}"
         ),
         f"    tasks queued: {recon_result.hunt_tasks_queued}",
+        "  index:",
+        f"    symbols:           {index_result.symbols if index_result else 0}",
+        f"    call_sites:        {index_result.call_sites if index_result else 0}",
+        f"    entry_points:      {index_result.entry_points if index_result else 0}",
+        f"    files_parsed:      {index_result.files_parsed if index_result else 0}",
+        f"    files_skipped:     {index_result.files_skipped if index_result else 0}",
+        f"    duration_ms:       {index_result.duration_ms if index_result else 0}",
         "  hunt:",
         f"    tasks processed:    {hunt_result.tasks_processed}",
         f"    succeeded:          {hunt_result.tasks_succeeded}",
@@ -181,6 +212,10 @@ async def run_scan(cfg: Config) -> ScanResult:
         summary_lines.append(f"  recon refusal: {recon_result.refusal_text}")
     if recon_result.error_text:
         summary_lines.append(f"  recon error:   {recon_result.error_text}")
+    if index_empty:
+        summary_lines.append(
+            "  index_build_empty: no symbols extracted; Hunt did not start"
+        )
 
     return ScanResult(
         run_id=run_id, exit_code=exit_code, summary="\n".join(summary_lines)

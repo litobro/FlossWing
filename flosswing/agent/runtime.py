@@ -175,11 +175,27 @@ async def run_session(
     server_config = create_sdk_mcp_server(name="flosswing", tools=tools) if tools else None
     mcp_servers: dict[str, Any] = {"flosswing": server_config} if server_config else {}
 
+    # Pre-authorize the MCP tools we registered. Without this, the SDK
+    # treats every tool call as needing interactive permission and denies
+    # them in a non-interactive context — surfacing as "Claude requested
+    # permissions to use mcp__flosswing__X, but you haven't granted it yet"
+    # in the tool_result stream. We also pass `tools=[]` to strip Claude
+    # Code's built-in tools (Read, Bash, Write, etc.) so the agent can
+    # only use what we explicitly registered, matching the
+    # docs/tool-contracts.md scope-matrix discipline.
+    allowed_tools: list[str] = [
+        f"mcp__flosswing__{getattr(t, 'name', '')}"
+        for t in tools
+        if getattr(t, "name", "")
+    ]
+
     options = ClaudeAgentOptions(
         model=model,
         system_prompt=system_prompt,
         env=auth_env,
         mcp_servers=mcp_servers,
+        tools=[],
+        allowed_tools=allowed_tools,
     )
 
     started = time.monotonic()

@@ -1,9 +1,14 @@
 """Config resolution: model, per-stage token budgets, auth detection.
 
-Three auth modes accepted (per v0.2 § Authentication, unchanged in v0.3):
-  A) ANTHROPIC_FOUNDRY_API_KEY (Foundry API key)
-  B) az login session (Entra ID, signaled here by AZURE_* env vars)
-  C) ANTHROPIC_API_KEY (direct Anthropic)
+Auth modes (aligned with Microsoft Learn "Configure Claude Code for
+Microsoft Foundry"):
+
+  Direct: ANTHROPIC_API_KEY
+  Foundry routing: CLAUDE_CODE_USE_FOUNDRY=1 + ANTHROPIC_FOUNDRY_RESOURCE,
+    plus one of:
+      ANTHROPIC_FOUNDRY_API_KEY (API-key auth), OR
+      an active az-login session (Entra ID), OR
+      AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_CLIENT_SECRET (Entra SP)
 """
 
 from __future__ import annotations
@@ -12,14 +17,35 @@ from pathlib import Path
 
 import pytest
 
+from flosswing import config as cfg_mod
 from flosswing.config import Config, resolve
 from flosswing.errors import AuthCredentialMissingError
+
+_ALL_AUTH_ENV: tuple[str, ...] = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+    "AZURE_CLIENT_ID",
+    "AZURE_TENANT_ID",
+    "AZURE_CLIENT_SECRET",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+)
+
+
+def _strip_all_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k in _ALL_AUTH_ENV:
+        monkeypatch.delenv(k, raising=False)
+    # Block any az-login probe; tests opt back in by re-patching.
+    monkeypatch.setattr(cfg_mod, "_has_az_session", lambda: False)
 
 
 def test_resolves_with_anthropic_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("ANTHROPIC_FOUNDRY_API_KEY", raising=False)
+    _strip_all_auth(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     cfg = resolve(
         repo_root=tmp_path,
@@ -37,22 +63,48 @@ def test_resolves_with_anthropic_api_key(
 def test_resolves_with_foundry_api_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_USE_FOUNDRY", "1")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "test-resource")
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "foundry-test")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-8")
     cfg = resolve(
         repo_root=tmp_path,
         model=None,
         recon_token_budget=None,
         hunt_token_budget=None,
     )
-    assert "ANTHROPIC_FOUNDRY_API_KEY" in cfg.auth_env
+    assert cfg.auth_env["CLAUDE_CODE_USE_FOUNDRY"] == "1"
+    assert cfg.auth_env["ANTHROPIC_FOUNDRY_RESOURCE"] == "test-resource"
+    assert cfg.auth_env["ANTHROPIC_FOUNDRY_API_KEY"] == "foundry-test"
+    assert cfg.auth_env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-4-8"
 
 
-def test_resolves_with_entra_id_env_vars(
+def test_resolves_with_foundry_routing_and_az_login(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_FOUNDRY_API_KEY", raising=False)
+    """Plain az-login session (no key, no SP triple) is the third Foundry auth."""
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_USE_FOUNDRY", "1")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "test-resource")
+    monkeypatch.setattr(cfg_mod, "_has_az_session", lambda: True)
+    cfg = resolve(
+        repo_root=tmp_path,
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+    )
+    assert cfg.auth_env["ANTHROPIC_FOUNDRY_RESOURCE"] == "test-resource"
+    # az-login is detected via probe; not stored in auth_env.
+    assert "ANTHROPIC_FOUNDRY_API_KEY" not in cfg.auth_env
+
+
+def test_resolves_with_foundry_routing_and_entra_sp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_USE_FOUNDRY", "1")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "test-resource")
     monkeypatch.setenv("AZURE_CLIENT_ID", "cli")
     monkeypatch.setenv("AZURE_TENANT_ID", "ten")
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "sec")
@@ -63,11 +115,29 @@ def test_resolves_with_entra_id_env_vars(
         hunt_token_budget=None,
     )
     assert "AZURE_CLIENT_ID" in cfg.auth_env
+    assert "AZURE_TENANT_ID" in cfg.auth_env
+    assert "AZURE_CLIENT_SECRET" in cfg.auth_env
+
+
+def test_foundry_key_without_routing_does_not_authenticate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Foundry API key alone (no CLAUDE_CODE_USE_FOUNDRY=1) is rejected."""
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "foundry-test")
+    with pytest.raises(AuthCredentialMissingError):
+        resolve(
+            repo_root=tmp_path,
+            model=None,
+            recon_token_budget=None,
+            hunt_token_budget=None,
+        )
 
 
 def test_per_stage_budget_overrides_apply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _strip_all_auth(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     cfg = resolve(
         repo_root=tmp_path,
@@ -83,7 +153,7 @@ def test_per_stage_budget_overrides_apply(
 def test_independent_budget_overrides(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """recon override does not affect hunt, and vice versa."""
+    _strip_all_auth(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     cfg = resolve(
         repo_root=tmp_path,
@@ -107,14 +177,7 @@ def test_independent_budget_overrides(
 def test_missing_all_credentials_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    for k in (
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_FOUNDRY_API_KEY",
-        "AZURE_CLIENT_ID",
-        "AZURE_TENANT_ID",
-        "AZURE_CLIENT_SECRET",
-    ):
-        monkeypatch.delenv(k, raising=False)
+    _strip_all_auth(monkeypatch)
     with pytest.raises(AuthCredentialMissingError) as exc:
         resolve(
             repo_root=tmp_path,
@@ -124,5 +187,27 @@ def test_missing_all_credentials_raises(
         )
     msg = str(exc.value)
     assert "ANTHROPIC_API_KEY" in msg
-    assert "ANTHROPIC_FOUNDRY_API_KEY" in msg
-    assert "az login" in msg
+    assert "CLAUDE_CODE_USE_FOUNDRY" in msg
+    assert "az-login" in msg or "az login" in msg
+
+
+def test_foundry_model_deployments_forwarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All three ANTHROPIC_DEFAULT_*_MODEL vars get forwarded to auth_env."""
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CODE_USE_FOUNDRY", "1")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "test-resource")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "k")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-8")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-6")
+    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-haiku-4-5")
+    cfg = resolve(
+        repo_root=tmp_path,
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+    )
+    assert cfg.auth_env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-4-8"
+    assert cfg.auth_env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-6"
+    assert cfg.auth_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-haiku-4-5"

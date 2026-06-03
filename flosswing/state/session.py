@@ -25,6 +25,9 @@ from sqlalchemy.pool import StaticPool
 # Ensure the connect listener (PRAGMA foreign_keys=ON) is registered.
 import flosswing.state.db  # noqa: F401
 
+# Re-exported for type hints elsewhere (e.g. flosswing.stages.index_build).
+SessionFactory = sessionmaker[Session]
+
 _DEFAULT_DB_PATH = Path.home() / ".flosswing" / "state.db"
 _ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 

@@ -33,6 +33,7 @@ from flosswing.state.models import AgentSession, Finding, HuntTask
 from flosswing.tools import findings as t_findings
 from flosswing.tools import fs as t_fs
 from flosswing.tools import search as t_search
+from flosswing.tools import symbols as t_symbols
 
 _PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "prompts"
 _HUNT_SYSTEM_PROMPT_PATH = _PROMPTS_ROOT / "system" / "hunt.md"
@@ -114,10 +115,10 @@ def _estimate_cost_usd(
 
 
 # -----------------------------------------------------------------------------
-# Tool builder — Hunt-scoped (4 tools: read_file, list_dir, grep,
-# record_finding). Mirrors agent.tool_registry.build_recon_tools shape;
-# kept inline in this file rather than expanded in tool_registry because
-# it's the only Hunt consumer in v0.3.
+# Tool builder — Hunt-scoped (6 tools in v0.5: read_file, list_dir, grep,
+# record_finding, find_definition, find_callers). Mirrors
+# agent.tool_registry.build_recon_tools shape; kept inline in this file
+# rather than expanded in tool_registry because it's the only Hunt consumer.
 # -----------------------------------------------------------------------------
 
 
@@ -228,7 +229,48 @@ def _build_hunt_tools(
             repo_root=repo_root,
         )
 
-    return [_read_file, _list_dir, _grep, _record_finding]
+    @tool(
+        "find_definition",
+        (
+            "Locate the definition of a symbol in the indexed target"
+            " repository. Optional file_hint or language narrows the"
+            " search."
+        ),
+        t_symbols.FindDefinitionInput.model_json_schema(),
+    )
+    async def _find_definition(args: dict[str, Any]) -> dict[str, Any]:
+        return _wrap_call(
+            t_symbols.find_definition,
+            input_model=t_symbols.FindDefinitionInput,
+            args=args,
+            run_id=run_id,
+        )
+
+    @tool(
+        "find_callers",
+        (
+            "List call sites for a symbol. Returns symbol_not_found if"
+            " no definition exists; ambiguous_symbol with candidates if"
+            " >1 match (retry with file_hint to disambiguate)."
+        ),
+        t_symbols.FindCallersInput.model_json_schema(),
+    )
+    async def _find_callers(args: dict[str, Any]) -> dict[str, Any]:
+        return _wrap_call(
+            t_symbols.find_callers,
+            input_model=t_symbols.FindCallersInput,
+            args=args,
+            run_id=run_id,
+        )
+
+    return [
+        _read_file,
+        _list_dir,
+        _grep,
+        _record_finding,
+        _find_definition,
+        _find_callers,
+    ]
 
 
 # -----------------------------------------------------------------------------
