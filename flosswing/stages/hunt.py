@@ -56,10 +56,15 @@ class HuntStageResult:
     tasks_budget_exceeded: int
     tasks_errored: int
     findings_total: int
+    # Token totals across all Hunt agent sessions in this stage run.
+    # Aggregated so the orchestrator can record the full scan's
+    # budget_used without re-querying agent_sessions.
+    input_tokens_total: int = 0
+    output_tokens_total: int = 0
 
     @classmethod
     def skipped(cls) -> HuntStageResult:
-        return cls(0, 0, 0, 0, 0, 0)
+        return cls(0, 0, 0, 0, 0, 0, 0, 0)
 
 
 # -----------------------------------------------------------------------------
@@ -264,6 +269,8 @@ async def run(
     tasks_refused = 0
     tasks_budget_exceeded = 0
     tasks_errored = 0
+    input_tokens_total = 0
+    output_tokens_total = 0
 
     for task_id in task_ids_in_order:
         # Re-fetch each task fresh; mark it running and compose its prompt.
@@ -299,6 +306,8 @@ async def run(
             input_tokens=session_result.input_tokens,
             output_tokens=session_result.output_tokens,
         )
+        input_tokens_total += session_result.input_tokens
+        output_tokens_total += session_result.output_tokens
 
         # INSERT the audit row after the session — same shape as Recon does
         # (the ck_agent_sessions_outcome CHECK only allows terminal values).
@@ -366,6 +375,8 @@ async def run(
         tasks_budget_exceeded=tasks_budget_exceeded,
         tasks_errored=tasks_errored,
         findings_total=findings_total,
+        input_tokens_total=input_tokens_total,
+        output_tokens_total=output_tokens_total,
     )
 
 

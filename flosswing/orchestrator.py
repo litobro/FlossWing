@@ -128,7 +128,12 @@ async def run_scan(cfg: Config) -> ScanResult:
             )
         row.finished_at = finished_at
         row.status = final_status
-        row.budget_used = recon_result.input_tokens + recon_result.output_tokens
+        row.budget_used = (
+            recon_result.input_tokens
+            + recon_result.output_tokens
+            + hunt_result.input_tokens_total
+            + hunt_result.output_tokens_total
+        )
 
     # Build the summary string. Per spec § Success criteria #3:
     # per-task lines from hunt_tasks + a roll-up footer.
@@ -163,9 +168,14 @@ async def run_scan(cfg: Config) -> ScanResult:
         f"    budget_exceeded:    {hunt_result.tasks_budget_exceeded}",
         f"    errored:            {hunt_result.tasks_errored}",
         f"    findings recorded:  {hunt_result.findings_total}",
+        f"    tokens in/out:      "
+        f"{hunt_result.input_tokens_total} / {hunt_result.output_tokens_total}",
         *task_lines,
-        f"  tokens in/out: {recon_result.input_tokens} / {recon_result.output_tokens}",
-        f"  est. cost USD: {recon_result.cost_usd:.4f}",
+        f"  total tokens in/out: "
+        f"{recon_result.input_tokens + hunt_result.input_tokens_total}"
+        f" / "
+        f"{recon_result.output_tokens + hunt_result.output_tokens_total}",
+        f"  est. cost USD (recon only): {recon_result.cost_usd:.4f}",
     ]
     if recon_result.refusal_text:
         summary_lines.append(f"  recon refusal: {recon_result.refusal_text}")

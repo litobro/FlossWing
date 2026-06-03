@@ -68,6 +68,8 @@ def _hunt(
     budget: int = 0,
     errored: int = 0,
     findings: int = 1,
+    input_tokens_total: int = 0,
+    output_tokens_total: int = 0,
 ) -> HuntStageResult:
     return HuntStageResult(
         tasks_processed=processed,
@@ -76,6 +78,8 @@ def _hunt(
         tasks_budget_exceeded=budget,
         tasks_errored=errored,
         findings_total=findings,
+        input_tokens_total=input_tokens_total,
+        output_tokens_total=output_tokens_total,
     )
 
 
@@ -207,3 +211,38 @@ def test_summary_contains_per_task_outcomes(
     assert "findings" in s
     # exit_code 0 because at least one task succeeded.
     assert result.exit_code == 0
+
+
+def test_budget_used_aggregates_recon_and_hunt_tokens(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """runs.budget_used must include Hunt tokens (regression for PR #5 review).
+
+    Before the fix, budget_used only summed Recon's input + output tokens,
+    silently undercounting every scan that completed Hunt.
+    """
+    from flosswing import orchestrator
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import recon as recon_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon()  # input=1000, output=200
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(
+            processed=2,
+            succeeded=2,
+            input_tokens_total=5000,
+            output_tokens_total=400,
+        )
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+
+    asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+
+    with st_session.session_scope() as s:
+        runs = s.query(Run).all()
+        assert len(runs) == 1
+        # 1000 + 200 (recon) + 5000 + 400 (hunt) = 6600
+        assert runs[0].budget_used == 6600
