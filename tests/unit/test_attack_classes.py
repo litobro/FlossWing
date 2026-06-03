@@ -32,3 +32,19 @@ def test_validate_accepts_known_class() -> None:
 def test_validate_rejects_unknown_class() -> None:
     with pytest.raises(InvalidAttackClassError):
         ac.validate("totally_made_up")
+
+
+def test_attack_class_meta_has_network_fields_with_defaults() -> None:
+    from flosswing.attack_classes import REGISTRY
+
+    meta = REGISTRY["command_injection"]
+    assert meta.network_default is False
+    assert meta.network_permitted is False
+
+
+def test_attack_class_meta_ssrf_permits_network() -> None:
+    from flosswing.attack_classes import REGISTRY
+
+    meta = REGISTRY["ssrf"]
+    assert meta.network_default is False
+    assert meta.network_permitted is True
