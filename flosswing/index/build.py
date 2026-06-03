@@ -197,14 +197,25 @@ async def build_index(
                     continue
                 # Callee resolution: look up by short callee_text against any
                 # Symbol whose short `symbol` matches. NULL if no match.
+                #
+                # FQN shape varies by language:
+                #   - Python:     dotted-module-path.short_name  (e.g. `src.example.cli.greet`)
+                #   - Non-Python: <file>::<short_name>           (e.g. `Foo.java::bar`)
+                # We match either suffix so callee resolution works for all
+                # 8 v1 languages, not just Python. (find_callers regression
+                # surfaced in PR #9 code review.)
                 callee_id: str | None = None
+
+                def _fqn_matches(fqn: str, short: str) -> bool:
+                    return fqn.endswith("." + short) or fqn.endswith("::" + short)
+
                 # Prefer same-file match for stability.
                 same_file_match = next(
                     (
                         sid
                         for (file, _fqn), sid in inserted_symbol_ids.items()
                         if file == cs.file
-                        and _fqn.endswith("." + cs.callee_text)
+                        and _fqn_matches(_fqn, cs.callee_text)
                     ),
                     None,
                 )
@@ -216,7 +227,7 @@ async def build_index(
                         (
                             sid
                             for fqn, sid in inserted_symbol_ids_by_fqn.items()
-                            if fqn.endswith("." + cs.callee_text)
+                            if _fqn_matches(fqn, cs.callee_text)
                         ),
                         None,
                     )

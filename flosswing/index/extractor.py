@@ -560,6 +560,9 @@ def _extract_for_language(
                 file=repo_relative_file,
                 line_start=line_start,
                 line_end=line_end,
+                # mypy can't narrow `adjusted_kind: str` back to the contract's
+                # Literal[...] — we ensure validity by construction (the set is
+                # produced from _KIND_SPECIFICITY keys, which are the literal).
                 kind=adjusted_kind,  # type: ignore[arg-type]
                 language=language,
             ))

@@ -290,3 +290,60 @@ async def test_build_index_call_site_with_unresolved_callee_uses_null(
         # `os.unlink` is external -> callee_symbol_id is NULL.
         by_text = {cs.callee_text for cs in unresolved}
     assert "unlink" in by_text
+
+
+@pytest.mark.asyncio
+async def test_build_index_resolves_call_edge_for_non_python_language(
+    isolated_db: Path,
+) -> None:
+    """Regression test for PR #9 review issue #1: non-Python FQNs use
+    `<file>::<short_name>` (e.g. `m.go::greet`), so the resolution
+    suffix-match must accept both `.short` (Python) and `::short`
+    (every other v1 language). Before the fix, `callee_symbol_id`
+    stayed NULL for every non-Python call site even when the callee
+    was indexed in the same file.
+    """
+    run_id, artifact_id = _make_run_and_artifact()
+    repo = isolated_db / "repo"
+    repo.mkdir(parents=True)
+    (repo / "m.go").write_text(
+        "package main\n"
+        "\n"
+        "func greet(name string) {\n"
+        "    println(name)\n"
+        "}\n"
+        "\n"
+        "func main() {\n"
+        "    greet(\"x\")\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    scratch = isolated_db / "runs" / run_id / "index"
+    scratch.mkdir(parents=True)
+
+    await build_index(
+        run_id=run_id, recon_artifact_id=artifact_id, repo=repo,
+        languages={"go"}, session_factory=st_session.session_factory(),
+        scratch_dir=scratch,
+    )
+    with st_session.session_scope() as s:
+        greet = s.execute(
+            select(Symbol).where(
+                Symbol.run_id == run_id, Symbol.symbol == "greet"
+            )
+        ).scalar_one()
+        main = s.execute(
+            select(Symbol).where(
+                Symbol.run_id == run_id, Symbol.symbol == "main"
+            )
+        ).scalar_one()
+        edges = list(
+            s.execute(
+                select(CallSite).where(
+                    CallSite.run_id == run_id,
+                    CallSite.callee_symbol_id == greet.id,
+                )
+            ).scalars().all()
+        )
+        assert len(edges) >= 1, "Go main -> greet call edge not resolved"
+        assert any(e.caller_symbol_id == main.id for e in edges)

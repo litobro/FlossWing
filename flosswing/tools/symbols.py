@@ -170,6 +170,9 @@ def find_definition(
                 file=r.file,
                 line_start=r.line_start,
                 line_end=r.line_end,
+                # SQLAlchemy Mapped[str] doesn't narrow to the contract's
+                # Literal[...]; insertion-side validation guarantees the value
+                # is always one of the seven kind literals from the schema.
                 kind=r.kind,  # type: ignore[arg-type]
                 language=r.language,
             )
@@ -228,6 +231,9 @@ def find_callers(
             file=target.file,
             line_start=target.line_start,
             line_end=target.line_end,
+            # SQLAlchemy Mapped[str] doesn't narrow to the contract's
+            # Literal[...]; insertion-side validation guarantees the value
+            # is always one of the seven kind literals from the schema.
             kind=target.kind,  # type: ignore[arg-type]
             language=target.language,
         )
@@ -298,6 +304,9 @@ def query_entry_points(
                 symbol=r.symbol,
                 file=r.file,
                 line=r.line,
+                # SQLAlchemy Mapped[str] doesn't narrow to the contract's
+                # Literal[...]; insertion-side validation guarantees the value
+                # is always one of the seven kind literals from the schema.
                 kind=r.kind,  # type: ignore[arg-type]
                 attacker_controlled_input=bool(r.attacker_controlled_input),
                 notes=r.notes,
