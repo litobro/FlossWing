@@ -81,8 +81,11 @@ def _truncate(buf: bytes, cap: int) -> tuple[str, bool]:
     return buf.decode("utf-8", errors="replace"), False
 
 
-def _infer_network_used(stderr_text: str) -> bool:
-    return any(p.search(stderr_text) for p in _NETWORK_PATTERNS)
+def _infer_network_used(stdout_text: str, stderr_text: str) -> bool:
+    """Scan both stdout and stderr — user code may print the diagnostic
+    to stdout via an explicit exception handler."""
+    combined = stdout_text + "\n" + stderr_text
+    return any(p.search(combined) for p in _NETWORK_PATTERNS)
 
 
 def _materialize_sources(
@@ -252,7 +255,7 @@ class FirejailSandbox:
 
         stdout_text, stdout_truncated = _truncate(stdout_bytes, _STDIO_CAP_BYTES)
         stderr_text, stderr_truncated = _truncate(stderr_bytes, _STDIO_CAP_BYTES)
-        network_used = _infer_network_used(stderr_text)
+        network_used = _infer_network_used(stdout_text, stderr_text)
 
         (scratch / "stdout").write_text(stdout_text, encoding="utf-8")
         (scratch / "stderr").write_text(stderr_text, encoding="utf-8")

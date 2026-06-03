@@ -77,7 +77,8 @@ async def test_docker_sandbox_run_passes_arch_mandated_flags(
     # Hard-coded checks: any drift here is an ARCH-constraint relaxation.
     assert kwargs["network_mode"] == "none"
     assert kwargs["read_only"] is True
-    assert kwargs["tmpfs"] == {"/scratch/work": "size=128m"}
+    # mode=1777 lets the unprivileged container user write to the tmpfs.
+    assert kwargs["tmpfs"] == {"/scratch/work": "size=128m,mode=1777"}
     assert kwargs["mem_limit"] == "2g"
     assert kwargs["nano_cpus"] == 2_000_000_000
     assert kwargs["pids_limit"] == 256
@@ -85,7 +86,9 @@ async def test_docker_sandbox_run_passes_arch_mandated_flags(
     assert "cap_add" not in kwargs or not kwargs["cap_add"]
     assert kwargs["user"] == "65534:65534"
     assert kwargs["working_dir"] == "/scratch/work"
-    assert kwargs["detach"] is False
+    # detach=True is required: containers.run(detach=False) returns bytes
+    # rather than a Container object, which breaks attrs/logs/OOM observation.
+    assert kwargs["detach"] is True
     assert kwargs["entrypoint"] == ["/bin/sh", "-lc"]
 
 

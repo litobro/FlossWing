@@ -99,8 +99,11 @@ def _truncate(buf: bytes, cap: int) -> tuple[str, bool]:
     return buf.decode("utf-8", errors="replace"), False
 
 
-def _infer_network_used(stderr_text: str) -> bool:
-    return any(p.search(stderr_text) for p in _NETWORK_PATTERNS)
+def _infer_network_used(stdout_text: str, stderr_text: str) -> bool:
+    """Scan both stdout and stderr — user code may catch the exception and
+    print the diagnostic to stdout (e.g. `print('blocked:', e)`)."""
+    combined = stdout_text + "\n" + stderr_text
+    return any(p.search(combined) for p in _NETWORK_PATTERNS)
 
 
 def _materialize_sources(
@@ -266,7 +269,11 @@ class DockerSandbox:
             image=image_tag,
             network_mode="none" if not invocation.network else "bridge",
             read_only=True,
-            tmpfs={"/scratch/work": _TMPFS_WORK_SIZE},
+            # mode=1777 (world-writable + sticky) lets the unprivileged
+            # container user (nobody:nogroup) write into the tmpfs. Without
+            # it the cp from /scratch/src to /scratch/work fails with EACCES
+            # because tmpfs mounts default to root:root 0755.
+            tmpfs={"/scratch/work": f"{_TMPFS_WORK_SIZE},mode=1777"},
             volumes={
                 str((scratch / "src").resolve()): {
                     "bind": "/scratch/src",
@@ -282,8 +289,12 @@ class DockerSandbox:
             working_dir="/scratch/work",
             environment=_filter_env(invocation.env),
             entrypoint=["/bin/sh", "-lc"],
-            command=script,
-            detach=False,
+            # Wrap in a list so the SDK doesn't shlex.split a multi-line
+            # str command into separate args (which would degrade the
+            # script to `sh -lc set` followed by positional args, dumping
+            # shell vars to stdout and skipping the cp + run).
+            command=[script],
+            detach=True,
             stdin_open=False,
             stderr=True,
             stdout=True,
@@ -298,15 +309,47 @@ class DockerSandbox:
         stdout_bytes = b""
         stderr_bytes = b""
 
+        container = None
         try:
-            container = await asyncio.wait_for(
-                asyncio.to_thread(client.containers.run, **run_kwargs),
-                timeout=invocation.timeout_seconds + 5,
+            # detach=True returns a Container handle near-instantly after the
+            # container starts. We then block on container.wait() with our own
+            # timeout so we can observe attrs/logs/OOM separately. The bare
+            # containers.run path returns bytes, not a Container — fatal for
+            # this code, which relies on attrs["State"] and .logs().
+            container = await asyncio.to_thread(
+                client.containers.run, **run_kwargs
             )
+            try:
+                wait_result = await asyncio.to_thread(
+                    container.wait, timeout=invocation.timeout_seconds
+                )
+                exit_code = int(wait_result.get("StatusCode", 0))
+            except Exception:
+                # container.wait() raises an HTTP ReadTimeout when the
+                # container is still running at the deadline. Kill it.
+                timed_out = True
+                exit_code = -1
+                signal = "SIGKILL"
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(container.kill, signal="SIGKILL")
+                # Give the daemon a moment to reap; ignore further failure.
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        container.wait, timeout=5
+                    )
+
+            # Re-read attrs after the container has fully exited so OOMKilled
+            # and ExitCode reflect the terminal state, not the launch state.
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(container.reload)
             attrs = getattr(container, "attrs", {}) or {}
             state = attrs.get("State", {}) if isinstance(attrs, dict) else {}
             oom_killed = bool(state.get("OOMKilled", False))
-            exit_code = int(state.get("ExitCode", 0))
+            if not timed_out:
+                # On the timeout path we keep exit_code=-1; otherwise prefer
+                # the daemon's final ExitCode over wait()'s status.
+                exit_code = int(state.get("ExitCode", exit_code))
+
             with contextlib.suppress(Exception):
                 stdout_bytes = await asyncio.to_thread(
                     container.logs, stdout=True, stderr=False, stream=False
@@ -314,30 +357,25 @@ class DockerSandbox:
                 stderr_bytes = await asyncio.to_thread(
                     container.logs, stdout=False, stderr=True, stream=False
                 )
-            # Cleanup the container (no auto-remove since we needed attrs).
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(container.remove, force=True)
             if oom_killed:
                 exit_code = -1
                 signal = "SIGKILL"
-        except TimeoutError:
-            timed_out = True
-            exit_code = -1
-            signal = "SIGKILL"
-            # Best-effort kill of any container we know about; SDK doesn't
-            # surface a handle here because containers.run blocked. Operator
-            # gets the timeout signal in the result; the daemon will reap.
         except docker.errors.APIError as e:
             raise SandboxBackendUnavailableError(
                 f"docker API error during execute: {e}"
             ) from e
+        finally:
+            # Always clean up the container; logs were already captured above.
+            if container is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(container.remove, force=True)
 
         finished = datetime.now(UTC)
         duration_ms = int((finished - started).total_seconds() * 1000)
 
         stdout_text, stdout_truncated = _truncate(stdout_bytes, _STDIO_CAP_BYTES)
         stderr_text, stderr_truncated = _truncate(stderr_bytes, _STDIO_CAP_BYTES)
-        network_used = _infer_network_used(stderr_text)
+        network_used = _infer_network_used(stdout_text, stderr_text)
 
         (scratch / "stdout").write_text(stdout_text, encoding="utf-8")
         (scratch / "stderr").write_text(stderr_text, encoding="utf-8")
