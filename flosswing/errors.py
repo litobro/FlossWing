@@ -138,6 +138,77 @@ class SuggestedFixTooLargeError(FlosswingError):
 
 
 # -----------------------------------------------------------------------------
+# v0.4 sandbox errors (per docs/specs/2026-06-02-v0.4-sandbox-design.md
+# § Error and refusal handling)
+# -----------------------------------------------------------------------------
+
+
+class PathEscapesScratchError(FlosswingError):
+    """A SourceFile.relative_path resolves outside /scratch/src/.
+
+    Per design decision #6, this maps to the existing v0.2
+    `input_validation_failed` umbrella code at the tool layer to
+    avoid touching the frozen tool contract.
+    """
+
+    code = "input_validation_failed"
+    retryable = False
+
+    def __init__(self, relative_path: str) -> None:
+        super().__init__(
+            f"SourceFile.relative_path escapes /scratch/src: {relative_path!r}"
+        )
+
+
+class SandboxImageBuildError(FlosswingError):
+    """Building a per-language sandbox image failed.
+
+    Carries a tail of the build log so the operator can diagnose
+    without re-running. The contract-level code is `sandbox_unavailable`
+    (per spec § Error and refusal handling) because the agent cannot
+    make progress without the image.
+    """
+
+    code = "sandbox_unavailable"
+    retryable = False
+
+    def __init__(self, *, language: str, log_tail: str) -> None:
+        super().__init__(
+            f"failed to build sandbox image for language={language!r}; "
+            f"build log tail:\n{log_tail}"
+        )
+        self.language = language
+        self.log_tail = log_tail
+
+
+class SandboxBackendUnavailableError(FlosswingError):
+    """The selected backend was available at startup but failed mid-run.
+
+    Distinct Python class from `SandboxUnavailableError` (raised by the
+    selector when neither backend is installed) so the raise site is
+    diagnosable. Both map to the same `sandbox_unavailable` wire code.
+    """
+
+    code = "sandbox_unavailable"
+    retryable = False
+
+
+class NetworkNotPermittedError(FlosswingError):
+    code = "network_not_permitted"
+    retryable = False
+
+
+class LanguageNotSupportedError(FlosswingError):
+    code = "language_not_supported"
+    retryable = False
+
+
+class ResourceLimitExceededError(FlosswingError):
+    code = "resource_limit_exceeded"
+    retryable = False
+
+
+# -----------------------------------------------------------------------------
 # Credential scrubber
 # -----------------------------------------------------------------------------
 
