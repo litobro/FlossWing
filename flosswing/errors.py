@@ -209,6 +209,80 @@ class ResourceLimitExceededError(FlosswingError):
 
 
 # -----------------------------------------------------------------------------
+# v0.5 symbol-index errors (per docs/specs/2026-06-02-v0.5-symbol-index-design.md
+# § Error and refusal handling and docs/tool-contracts.md § Scope: symbols)
+# -----------------------------------------------------------------------------
+
+
+class IndexBuildError(FlosswingError):
+    """Raised by orchestrator.run_scan when IndexBuild produces 0 symbols.
+
+    Per spec § Error and refusal handling: "If IndexBuild ends with zero
+    symbols recorded ... the orchestrator finalizes the run as `errored`
+    with a clear message and exits 1. Hunters do not start."
+    """
+
+    code = "index_build_empty"
+    retryable = False
+
+
+class LanguageGrammarNotLoadedError(FlosswingError):
+    """A per-file build raised because the tree-sitter grammar wouldn't load.
+
+    Caught inside index.build.build_index per-file loop; the file is
+    skipped and the build continues. Never surfaces to the agent — no
+    wire code mapping.
+    """
+
+    code = "language_grammar_not_loaded"
+    retryable = False
+
+    def __init__(self, language: str) -> None:
+        super().__init__(
+            f"tree-sitter grammar for language={language!r} could not be loaded"
+        )
+        self.language = language
+
+
+class SymbolNotFoundError(FlosswingError):
+    """Per docs/tool-contracts.md § find_callers errors."""
+
+    code = "symbol_not_found"
+    retryable = False
+
+
+class AmbiguousSymbolError(FlosswingError):
+    """Per docs/tool-contracts.md § find_callers errors.
+
+    The message includes the list of candidate locations so the agent
+    can retry with file_hint per the contract's wording.
+    """
+
+    code = "ambiguous_symbol"
+    retryable = False
+
+    def __init__(self, *, symbol: str, candidates: list[str]) -> None:
+        candidate_text = "; ".join(candidates) if candidates else "(none)"
+        super().__init__(
+            f"symbol={symbol!r} is ambiguous — candidates: {candidate_text}"
+        )
+        self.symbol = symbol
+        self.candidates = candidates
+
+
+class NotIndexedError(FlosswingError):
+    """Per docs/tool-contracts.md § find_definition errors.
+
+    Should be unreachable in normal v0.5 operation — IndexBuild
+    guarantees ≥1 symbol or fails the run before Hunt starts. Logged
+    loudly if it ever fires.
+    """
+
+    code = "not_indexed"
+    retryable = False
+
+
+# -----------------------------------------------------------------------------
 # Credential scrubber
 # -----------------------------------------------------------------------------
 
