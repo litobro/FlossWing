@@ -96,102 +96,98 @@ async def test_validate_smoke_runs_end_to_end_against_v02_smoke(
         f"unexpected exit_code {result.exit_code}; summary={result.summary}"
     )
 
-    # Snapshot ORM attributes inside the scope; instances expire on commit.
+    # Snapshot every attribute we'll assert on INSIDE the session scope;
+    # SQLAlchemy 2.0 expires ORM instances on commit and any post-scope
+    # attribute access raises DetachedInstanceError.
     with st_session.session_scope() as s:
-        findings = list(
-            s.execute(
+        finding_ids = [
+            f.id for f in s.execute(
                 select(Finding).where(Finding.run_id == result.run_id)
-            )
-            .scalars()
-            .all()
-        )
-    assert len(findings) >= 1, (
-        "Hunt did not produce any findings against v02_smoke; "
-        "expected at least the command_injection finding"
-    )
-
-    with st_session.session_scope() as s:
-        validations = list(
-            s.execute(
+            ).scalars().all()
+        ]
+        # (finding_id, verdict, rationale) tuples
+        validation_snaps: list[tuple[str, str, str]] = [
+            (v.finding_id, v.verdict, v.rationale)
+            for v in s.execute(
                 select(Validation).where(
-                    Validation.finding_id.in_([f.id for f in findings])
+                    Validation.finding_id.in_(finding_ids)
                 )
+            ).scalars().all()
+        ]
+        # (id, finding_id, task_id, outcome, input_tokens) tuples
+        validate_session_snaps: list[
+            tuple[str, str | None, str | None, str, int]
+        ] = [
+            (
+                sess.id, sess.finding_id, sess.task_id,
+                sess.outcome, sess.input_tokens,
             )
-            .scalars()
-            .all()
-        )
-        validate_sessions = list(
-            s.execute(
+            for sess in s.execute(
                 select(AgentSession).where(
                     AgentSession.run_id == result.run_id,
                     AgentSession.stage == "validate",
                 )
-            )
-            .scalars()
-            .all()
-        )
+            ).scalars().all()
+        ]
+        # (id, status, validated_at) tuples for finalization checks
+        finding_status_snaps: list[tuple[str, str, str | None]] = [
+            (f.id, f.status, f.validated_at)
+            for f in s.execute(
+                select(Finding).where(Finding.run_id == result.run_id)
+            ).scalars().all()
+        ]
 
-    # Per § Success criteria #2: at least one validations row.
-    assert len(validations) >= 1, (
+    assert len(finding_ids) >= 1, (
+        "Hunt did not produce any findings against v02_smoke; "
+        "expected at least the command_injection finding"
+    )
+    assert len(validation_snaps) >= 1, (
         "Validate did not produce any validations rows; expected at "
         "least one terminal verdict"
     )
 
-    # Per § Success criteria #2: rationale non-empty and >=50 chars.
-    for v in validations:
-        assert isinstance(v.rationale, str)
-        assert len(v.rationale) >= 50, (
-            f"validations.rationale too short ({len(v.rationale)} chars): "
-            f"{v.rationale!r}"
+    # Per § Success criteria #2: rationale non-empty and >=50 chars,
+    # verdict terminal.
+    for _fid, verdict, rationale in validation_snaps:
+        assert isinstance(rationale, str)
+        assert len(rationale) >= 50, (
+            f"validations.rationale too short ({len(rationale)} chars): "
+            f"{rationale!r}"
         )
-
-    # Per § Success criteria #2: validations.verdict is terminal.
-    for v in validations:
-        assert v.verdict in ("confirmed", "rejected", "uncertain"), (
-            f"non-terminal verdict in validations row: {v.verdict!r}"
+        assert verdict in ("confirmed", "rejected", "uncertain"), (
+            f"non-terminal verdict in validations row: {verdict!r}"
         )
 
     # Per § Success criteria #2: agent_sessions row per finding.
-    assert len(validate_sessions) >= 1, (
+    assert len(validate_session_snaps) >= 1, (
         "No agent_sessions row with stage='validate' was written"
     )
-    for sess in validate_sessions:
-        assert sess.finding_id is not None
-        assert sess.task_id is None
-        assert sess.outcome in (
-            "completed",
-            "refused",
-            "budget_exceeded",
-            "errored",
+    for sess_id, sess_finding_id, sess_task_id, outcome, input_tokens in (
+        validate_session_snaps
+    ):
+        assert sess_finding_id is not None
+        assert sess_task_id is None
+        assert outcome in (
+            "completed", "refused", "budget_exceeded", "errored",
         )
         # Even refused/errored sessions consume some input tokens for
         # the system prompt + user prompt.
-        assert sess.input_tokens > 0, (
-            f"agent_sessions.input_tokens is 0 for sess {sess.id}; "
+        assert input_tokens > 0, (
+            f"agent_sessions.input_tokens is 0 for sess {sess_id}; "
             "expected nonzero even on refusal"
         )
 
     # Per § Success criteria #2: findings that received a terminal verdict
-    # have status in {confirmed, rejected, uncertain}.
-    with st_session.session_scope() as s:
-        refreshed = list(
-            s.execute(
-                select(Finding).where(Finding.run_id == result.run_id)
-            )
-            .scalars()
-            .all()
-        )
-    validated_ids = {v.finding_id for v in validations}
-    for f in refreshed:
-        if f.id in validated_ids:
-            assert f.status in ("confirmed", "rejected", "uncertain")
-            assert f.validated_at is not None
+    # have status in {confirmed, rejected, uncertain}; per design decision
+    # #5, others stay pending_validation.
+    validated_ids = {fid for fid, _, _ in validation_snaps}
+    for fid, status, validated_at in finding_status_snaps:
+        if fid in validated_ids:
+            assert status in ("confirmed", "rejected", "uncertain")
+            assert validated_at is not None
         else:
-            # Per design decision #5: a finding that didn't get a verdict
-            # (refused / budget_exceeded / errored / no-call session)
-            # stays pending_validation.
-            assert f.status == "pending_validation"
-            assert f.validated_at is None
+            assert status == "pending_validation"
+            assert validated_at is None
 
 
 @pytest.mark.asyncio
@@ -220,41 +216,36 @@ async def test_validate_smoke_command_injection_finding_gets_verdict(
         auth_env=auth,
     )
     result = await run_scan(cfg)
+    # Snapshot inside scope; ORM expires on commit.
     with st_session.session_scope() as s:
-        ci_findings = list(
-            s.execute(
+        ci_finding_ids = [
+            f.id for f in s.execute(
                 select(Finding).where(
                     Finding.run_id == result.run_id,
                     Finding.attack_class == "command_injection",
                 )
-            )
-            .scalars()
-            .all()
-        )
-    assert len(ci_findings) >= 1, (
+            ).scalars().all()
+        ]
+        verdict_rationale_pairs: list[tuple[str, str]] = [
+            (v.verdict, v.rationale)
+            for v in s.execute(
+                select(Validation).where(
+                    Validation.finding_id.in_(ci_finding_ids)
+                )
+            ).scalars().all()
+        ]
+
+    assert len(ci_finding_ids) >= 1, (
         "Expected at least one command_injection finding from v02_smoke; "
         "v0.3's Hunt produces this deliberately"
     )
-    # At least one of them should have a validations row.
-    with st_session.session_scope() as s:
-        validations_for_ci = list(
-            s.execute(
-                select(Validation).where(
-                    Validation.finding_id.in_([f.id for f in ci_findings])
-                )
-            )
-            .scalars()
-            .all()
-        )
-    # If zero, that's allowed per design decision #5 (refusal / no-call)
-    # but it's worth surfacing in the test output.
-    if len(validations_for_ci) == 0:
+    # If zero, that's allowed per design decision #5 (refusal / no-call).
+    if len(verdict_rationale_pairs) == 0:
         pytest.skip(
             "Validator did not produce a verdict for any command_injection "
             "finding in this run (refusal / no-call session). Re-run to "
             "exercise the verdict path."
         )
-    # If we got here, at least one terminal verdict landed.
-    for v in validations_for_ci:
-        assert v.verdict in ("confirmed", "rejected", "uncertain")
-        assert len(v.rationale) >= 50
+    for verdict, rationale in verdict_rationale_pairs:
+        assert verdict in ("confirmed", "rejected", "uncertain")
+        assert len(rationale) >= 50
