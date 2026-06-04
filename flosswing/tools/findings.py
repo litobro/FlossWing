@@ -397,6 +397,9 @@ def query_findings(
                 function=r.function,
                 line_start=r.line_start,
                 line_end=r.line_end,
+                # SQLAlchemy Mapped[str] doesn't narrow to the contract's
+                # Literal[...]; insertion-side validation guarantees the
+                # value is always one of the documented literal options.
                 severity=r.severity,  # type: ignore[arg-type]
                 confidence=r.confidence,  # type: ignore[arg-type]
                 status=r.status,  # type: ignore[arg-type]

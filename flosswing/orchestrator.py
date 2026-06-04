@@ -63,6 +63,7 @@ def _config_for_run_row(cfg: Config) -> str:
         "model": cfg.model,
         "recon_token_budget": cfg.recon_token_budget,
         "hunt_token_budget": cfg.hunt_token_budget,
+        "validate_token_budget": cfg.validate_token_budget,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)

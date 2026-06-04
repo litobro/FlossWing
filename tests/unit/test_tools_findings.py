@@ -620,6 +620,9 @@ def test_validate_finding_happy_path_writes_validation_and_flips_status(
     out = validate_finding(
         ValidateFindingInput(
             finding_id=finding_id,
+            # The pytest parametrize values are typed as plain `str`; the
+            # contract narrows verdict to Literal[...]. Parametrize semantics
+            # exercise the same three literal values; the cast is safe.
             verdict=verdict,  # type: ignore[arg-type]
             rationale="x" * 60,
             evidence_files=["src/a.py"],
