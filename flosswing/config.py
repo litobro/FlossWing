@@ -41,6 +41,7 @@ from flosswing.errors import AuthCredentialMissingError
 DEFAULT_MODEL: str = "claude-opus-4-7"
 DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
 DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
+DEFAULT_VALIDATE_TOKEN_BUDGET: int = 100_000
 
 # Direct Anthropic API: just the key.
 _DIRECT_KEYS: tuple[str, ...] = ("ANTHROPIC_API_KEY",)
@@ -74,6 +75,7 @@ class Config:
     model: str
     recon_token_budget: int
     hunt_token_budget: int
+    validate_token_budget: int
     auth_env: dict[str, str] = field(default_factory=dict)
 
 
@@ -108,6 +110,7 @@ def resolve(
     model: str | None,
     recon_token_budget: int | None,
     hunt_token_budget: int | None,
+    validate_token_budget: int | None,
 ) -> Config:
     """Build a Config from CLI flags + env. Raises if no auth path."""
     auth_env: dict[str, str] = {}
@@ -162,6 +165,11 @@ def resolve(
             hunt_token_budget
             if hunt_token_budget is not None
             else DEFAULT_HUNT_TOKEN_BUDGET
+        ),
+        validate_token_budget=(
+            validate_token_budget
+            if validate_token_budget is not None
+            else DEFAULT_VALIDATE_TOKEN_BUDGET
         ),
         auth_env=auth_env,
     )

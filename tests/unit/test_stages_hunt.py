@@ -94,6 +94,7 @@ def _cfg(repo: Path) -> Config:
         model="claude-opus-4-7",
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
+        validate_token_budget=200_000,
         auth_env={"ANTHROPIC_API_KEY": "sk-test"},
     )
 

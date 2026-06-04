@@ -41,19 +41,27 @@ def main() -> None:
     default=None,
     help="Override the per-task Hunt token budget (default 200000).",
 )
+@click.option(
+    "--validate-token-budget",
+    type=int,
+    default=None,
+    help="Override the per-finding Validate token budget (default 100000).",
+)
 def scan(
     path: str,
     model: str | None,
     recon_token_budget: int | None,
     hunt_token_budget: int | None,
+    validate_token_budget: int | None,
 ) -> None:
-    """Scan a cloned target repository at PATH (Recon -> Hunt)."""
+    """Scan a cloned target repository at PATH (Recon -> Hunt -> Validate)."""
     try:
         cfg = fcfg.resolve(
             repo_root=Path(path),
             model=model,
             recon_token_budget=recon_token_budget,
             hunt_token_budget=hunt_token_budget,
+            validate_token_budget=validate_token_budget,
         )
     except FlosswingError as e:
         click.echo(e.message, err=True)
