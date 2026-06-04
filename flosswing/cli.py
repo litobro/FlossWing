@@ -53,6 +53,12 @@ def main() -> None:
     default=None,
     help="Override the Gapfill token budget (default 50000).",
 )
+@click.option(
+    "--dedupe-token-budget",
+    type=int,
+    default=None,
+    help="Per-cluster Dedupe session token cap (default 50000).",
+)
 def scan(
     path: str,
     model: str | None,
@@ -60,6 +66,7 @@ def scan(
     hunt_token_budget: int | None,
     validate_token_budget: int | None,
     gapfill_token_budget: int | None,
+    dedupe_token_budget: int | None,
 ) -> None:
     """Scan a cloned target repository at PATH (Recon -> Hunt -> Validate -> Gapfill)."""
     try:
@@ -70,6 +77,7 @@ def scan(
             hunt_token_budget=hunt_token_budget,
             validate_token_budget=validate_token_budget,
             gapfill_token_budget=gapfill_token_budget,
+            dedupe_token_budget=dedupe_token_budget,
         )
     except FlosswingError as e:
         click.echo(e.message, err=True)

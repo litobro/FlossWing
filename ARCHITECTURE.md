@@ -193,17 +193,16 @@ Two-pass:
 2. **Agent pass.** For each cluster of size > 1, an agent reviews and decides if they
    share a root cause. Merges duplicates into a primary finding with linked variants.
 
-Tool allowlist: `query_findings`, `merge_findings`, `link_variant`.
+Tool allowlist: `read_file`, `query_findings`, `merge_findings`, `link_variant`.
 
-> **v0.8 scope note (pending implementation):** The first Dedupe plumbing
-> milestone registers `query_findings`, `merge_findings`, `link_variant` only.
-> The scope matrix in `docs/tool-contracts.md` lists `read_file` under Dedupe;
-> this stage description's allowlist is authoritative, and the matrix cell is
-> flagged for operator resolution. Pass 1 and Pass 2 run as separate
-> transactions; if the process dies mid-Pass-2 the run is not resumable (new
-> `run_id` required). Singleton clusters get a `dedupe_clusters` row but no
-> agent session. Sequential per-cluster execution; parallel dedupe is its own
-> milestone. See `docs/specs/2026-06-02-v0.8-dedupe-design.md`.
+> **v0.8 scope note:** The first Dedupe plumbing implementation registers
+> `read_file`, `query_findings`, `merge_findings`, and `link_variant` — four
+> tools, matching the scope matrix in `docs/tool-contracts.md`. Pass 1
+> (deterministic clustering) and Pass 2 (per-cluster agent review) run as
+> separate transactions; if the process dies mid-Pass-2 the run is not
+> resumable in v1 (new `run_id` required). Singleton clusters (size 1) get a
+> `dedupe_clusters` row but no agent session. Sequential per-cluster
+> execution; parallel dedupe is its own milestone.
 
 ### Stage 6: Trace — **v1 (in-repo only)**
 

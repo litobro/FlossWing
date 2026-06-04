@@ -43,6 +43,7 @@ DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
 DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
 DEFAULT_VALIDATE_TOKEN_BUDGET: int = 100_000
 DEFAULT_GAPFILL_TOKEN_BUDGET: int = 50_000
+DEFAULT_DEDUPE_TOKEN_BUDGET: int = 50_000
 
 # Direct Anthropic API: just the key.
 _DIRECT_KEYS: tuple[str, ...] = ("ANTHROPIC_API_KEY",)
@@ -79,6 +80,7 @@ class Config:
     validate_token_budget: int
     gapfill_token_budget: int
     auth_env: dict[str, str] = field(default_factory=dict)
+    dedupe_token_budget: int = DEFAULT_DEDUPE_TOKEN_BUDGET
 
 
 def _collect_present(keys: tuple[str, ...]) -> dict[str, str]:
@@ -114,6 +116,7 @@ def resolve(
     hunt_token_budget: int | None,
     validate_token_budget: int | None,
     gapfill_token_budget: int | None,
+    dedupe_token_budget: int | None = None,
 ) -> Config:
     """Build a Config from CLI flags + env. Raises if no auth path."""
     auth_env: dict[str, str] = {}
@@ -180,4 +183,9 @@ def resolve(
             else DEFAULT_GAPFILL_TOKEN_BUDGET
         ),
         auth_env=auth_env,
+        dedupe_token_budget=(
+            dedupe_token_budget
+            if dedupe_token_budget is not None
+            else DEFAULT_DEDUPE_TOKEN_BUDGET
+        ),
     )

@@ -123,10 +123,26 @@ class Finding(Base):
     created_at: Mapped[str] = mapped_column(Text)
     # Validate-managed (added in v0.6):
     validated_at: Mapped[str | None] = mapped_column(Text, default=None)
-    # Dedupe-managed columns (primary_finding_id, dedupe_cluster_id,
-    # dedupe_role, root_cause_summary, superseded_at) and Trace-managed
-    # (reachable) exist in the schema but are intentionally not mapped
-    # here — Hunt does not read or write them in v0.3.
+    # Dedupe-managed (added in v0.8). The columns already exist in the
+    # schema (001_initial); v0.8 only adds the Python mappings. CHECK
+    # constraint ck_findings_dedupe_role is enforced server-side and not
+    # duplicated in Python. The FK from primary_finding_id back to
+    # findings.id is named fk_findings_primary_findings (ON DELETE
+    # SET NULL); dedupe_cluster_id's FK to dedupe_clusters.id is
+    # fk_findings_dedupe_cluster_id_dedupe_clusters (see 001_initial).
+    primary_finding_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("findings.id", ondelete="SET NULL"), default=None
+    )
+    dedupe_cluster_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("dedupe_clusters.id", ondelete="SET NULL"),
+        default=None,
+    )
+    dedupe_role: Mapped[str | None] = mapped_column(Text, default=None)
+    root_cause_summary: Mapped[str | None] = mapped_column(Text, default=None)
+    superseded_at: Mapped[str | None] = mapped_column(Text, default=None)
+    # Trace-managed (reachable) exists in the schema but is intentionally
+    # not mapped here — Trace lands in v0.9.
 
 
 # -----------------------------------------------------------------------------
@@ -216,4 +232,44 @@ class Validation(Base):
     agent_session_id: Mapped[str] = mapped_column(
         Text, ForeignKey("agent_sessions.id", ondelete="RESTRICT")
     )
+    created_at: Mapped[str] = mapped_column(Text)
+
+
+# -----------------------------------------------------------------------------
+# v0.8 Dedupe models (per docs/specs/2026-06-02-v0.8-dedupe-design.md
+# § SQLAlchemy models). Tables already exist in 001_initial; v0.8 only adds
+# the models. CHECK constraints (ck_dedupe_clusters_member_count,
+# ck_finding_links_relationship, ck_finding_links_distinct) and the UNIQUE
+# constraint (uq_finding_links_ordered) are enforced server-side by SQLite
+# and not duplicated in Python.
+# -----------------------------------------------------------------------------
+
+
+class DedupeCluster(Base):
+    __tablename__ = "dedupe_clusters"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("runs.id", ondelete="CASCADE")
+    )
+    primary_finding_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("findings.id", ondelete="CASCADE")
+    )
+    root_cause_summary: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(Text)
+    member_count: Mapped[int] = mapped_column(Integer)
+
+
+class FindingLink(Base):
+    __tablename__ = "finding_links"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    finding_id_a: Mapped[str] = mapped_column(
+        Text, ForeignKey("findings.id", ondelete="CASCADE")
+    )
+    finding_id_b: Mapped[str] = mapped_column(
+        Text, ForeignKey("findings.id", ondelete="CASCADE")
+    )
+    relationship: Mapped[str] = mapped_column(Text)
+    note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(Text)
