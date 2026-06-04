@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from flosswing import config as cfg_mod
+from flosswing import config as fcfg
 from flosswing.config import Config, resolve
 from flosswing.errors import AuthCredentialMissingError
 
@@ -52,6 +53,7 @@ def test_resolves_with_anthropic_api_key(
         model=None,
         recon_token_budget=None,
         hunt_token_budget=None,
+        validate_token_budget=None,
     )
     assert isinstance(cfg, Config)
     assert cfg.model == "claude-opus-4-7"
@@ -73,6 +75,7 @@ def test_resolves_with_foundry_api_key(
         model=None,
         recon_token_budget=None,
         hunt_token_budget=None,
+        validate_token_budget=None,
     )
     assert cfg.auth_env["CLAUDE_CODE_USE_FOUNDRY"] == "1"
     assert cfg.auth_env["ANTHROPIC_FOUNDRY_RESOURCE"] == "test-resource"
@@ -93,6 +96,7 @@ def test_resolves_with_foundry_routing_and_az_login(
         model=None,
         recon_token_budget=None,
         hunt_token_budget=None,
+        validate_token_budget=None,
     )
     assert cfg.auth_env["ANTHROPIC_FOUNDRY_RESOURCE"] == "test-resource"
     # az-login is detected via probe; not stored in auth_env.
@@ -113,6 +117,7 @@ def test_resolves_with_foundry_routing_and_entra_sp(
         model=None,
         recon_token_budget=None,
         hunt_token_budget=None,
+        validate_token_budget=None,
     )
     assert "AZURE_CLIENT_ID" in cfg.auth_env
     assert "AZURE_TENANT_ID" in cfg.auth_env
@@ -131,6 +136,7 @@ def test_foundry_key_without_routing_does_not_authenticate(
             model=None,
             recon_token_budget=None,
             hunt_token_budget=None,
+            validate_token_budget=None,
         )
 
 
@@ -144,6 +150,7 @@ def test_per_stage_budget_overrides_apply(
         model="claude-sonnet-4-6",
         recon_token_budget=11_111,
         hunt_token_budget=22_222,
+        validate_token_budget=None,
     )
     assert cfg.model == "claude-sonnet-4-6"
     assert cfg.recon_token_budget == 11_111
@@ -160,6 +167,7 @@ def test_independent_budget_overrides(
         model=None,
         recon_token_budget=42,
         hunt_token_budget=None,
+        validate_token_budget=None,
     )
     assert cfg.recon_token_budget == 42
     assert cfg.hunt_token_budget == 200_000
@@ -169,6 +177,7 @@ def test_independent_budget_overrides(
         model=None,
         recon_token_budget=None,
         hunt_token_budget=99,
+        validate_token_budget=None,
     )
     assert cfg2.recon_token_budget == 200_000
     assert cfg2.hunt_token_budget == 99
@@ -184,6 +193,7 @@ def test_missing_all_credentials_raises(
             model=None,
             recon_token_budget=None,
             hunt_token_budget=None,
+            validate_token_budget=None,
         )
     msg = str(exc.value)
     assert "ANTHROPIC_API_KEY" in msg
@@ -207,7 +217,37 @@ def test_foundry_model_deployments_forwarded(
         model=None,
         recon_token_budget=None,
         hunt_token_budget=None,
+        validate_token_budget=None,
     )
     assert cfg.auth_env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-4-8"
     assert cfg.auth_env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-6"
     assert cfg.auth_env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "claude-haiku-4-5"
+
+
+def test_resolve_uses_default_validate_token_budget_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+    )
+    assert cfg.validate_token_budget == 100_000
+    assert cfg.validate_token_budget == fcfg.DEFAULT_VALIDATE_TOKEN_BUDGET
+
+
+def test_resolve_uses_cli_validate_token_budget_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=42_000,
+    )
+    assert cfg.validate_token_budget == 42_000

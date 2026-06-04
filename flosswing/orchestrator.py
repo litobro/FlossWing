@@ -17,8 +17,9 @@ from flosswing.index.build import IndexBuildResult
 from flosswing.stages import hunt as hunt_stage
 from flosswing.stages import index_build as index_build_stage
 from flosswing.stages import recon as recon_stage
+from flosswing.stages import validate as validate_stage
 from flosswing.state import session as st_session
-from flosswing.state.models import HuntTask, Run
+from flosswing.state.models import Finding, HuntTask, Run, Validation
 
 
 @dataclass
@@ -62,6 +63,7 @@ def _config_for_run_row(cfg: Config) -> str:
         "model": cfg.model,
         "recon_token_budget": cfg.recon_token_budget,
         "hunt_token_budget": cfg.hunt_token_budget,
+        "validate_token_budget": cfg.validate_token_budget,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)
@@ -126,17 +128,53 @@ async def run_scan(cfg: Config) -> ScanResult:
     else:
         hunt_result = hunt_stage.HuntStageResult.skipped()
 
+    # v0.6: Validate runs after Hunt when Hunt produced >=1 finding.
+    # Per docs/specs/2026-06-02-v0.6-validate-design.md § orchestrator
+    # extension. Plan-time decision #6: Validate runs even if Hunt had
+    # partial failures, as long as >=1 finding landed.
+    if recon_ok and hunt_result.findings_total >= 1:
+        validate_result = await validate_stage.run(
+            run_id=run_id,
+            repo=cfg.repo_root,
+            cfg=cfg,
+            session_factory=st_session.session_factory(),
+        )
+    else:
+        validate_result = validate_stage.ValidateStageResult.skipped()
+
     # Run finalization (per spec § Component responsibilities
     # orchestrator.run_scan extension):
-    #   recon failed                       -> errored, exit 1
-    #   recon completed, 0 tasks queued    -> errored, exit 1
-    #   hunt processed >=1 AND >=1 success -> completed, exit 0
-    #   hunt processed >=1 AND 0 success   -> errored, exit 1
+    #   recon failed                                        -> errored, exit 1
+    #   recon completed, 0 tasks queued                     -> errored, exit 1
+    #   IndexBuild empty (symbols==0)                       -> errored, exit 1
+    #   hunt processed >=1 AND zero succeeded               -> errored, exit 1
+    #   hunt produced 0 findings                            -> completed (skip Validate)
+    #   hunt findings >=1 AND >=1 terminal Validate verdict -> completed, exit 0
+    #   hunt findings >=1 AND every Validate non-terminal   -> errored, exit 1
     if not recon_ok:
         final_status = "errored"
-    elif hunt_result.tasks_succeeded >= 1:
+    elif hunt_result.tasks_succeeded < 1:
+        # Kept separate from `not recon_ok` for the spec's
+        # "hunt processed >=1 AND zero succeeded" branch to remain
+        # legible alongside Validate's terminal-verdict check below.
+        final_status = "errored"
+    elif hunt_result.findings_total == 0:
+        # No findings -> Validate was skipped -> the run did its job.
+        final_status = "completed"
+    elif (
+        validate_result.findings_confirmed
+        + validate_result.findings_rejected
+        + validate_result.findings_uncertain
+        >= 1
+    ):
+        # Hunt produced findings AND >=1 Validate session reached a
+        # terminal verdict -> completed.
         final_status = "completed"
     else:
+        # Hunt produced findings but every Validate session was
+        # non-terminal -> errored. Per plan-time decision #5, findings
+        # that stay pending_validation don't fail individually, but if
+        # NONE reach a verdict the run as a whole errors.
         final_status = "errored"
     exit_code = 0 if final_status == "completed" else 1
     finished_at = _now_iso()
@@ -156,6 +194,8 @@ async def run_scan(cfg: Config) -> ScanResult:
             + recon_result.output_tokens
             + hunt_result.input_tokens_total
             + hunt_result.output_tokens_total
+            + validate_result.input_tokens_total
+            + validate_result.output_tokens_total
         )
 
     # Build the summary string. Per spec § Success criteria #3:
@@ -174,6 +214,44 @@ async def run_scan(cfg: Config) -> ScanResult:
                 f"  - {t.attack_class} {t.scope_hint} -> {t.status}, "
                 f"{t.findings_count} findings"
             )
+
+    # Per-finding verdict lines (one per Hunt-produced finding). Findings
+    # without a validations row stay `pending_validation` in the summary
+    # per plan-time decision #5.
+    finding_lines: list[str] = []
+    if validate_result.findings_processed >= 1:
+        with st_session.session_scope() as s:
+            finding_rows = list(
+                s.execute(
+                    select(Finding).where(Finding.run_id == run_id)
+                )
+                .scalars()
+                .all()
+            )
+            for f in finding_rows:
+                v = s.execute(
+                    select(Validation).where(
+                        Validation.finding_id == f.id
+                    )
+                ).scalar_one_or_none()
+                verdict = (
+                    v.verdict if v is not None else "pending_validation"
+                )
+                finding_lines.append(
+                    f"    - {f.attack_class} {f.file}:{f.line_start} "
+                    f"-> {verdict}"
+                )
+
+    total_in_tokens = (
+        recon_result.input_tokens
+        + hunt_result.input_tokens_total
+        + validate_result.input_tokens_total
+    )
+    total_out_tokens = (
+        recon_result.output_tokens
+        + hunt_result.output_tokens_total
+        + validate_result.output_tokens_total
+    )
 
     summary_lines = [
         f"Run {run_id} {final_status}.",
@@ -202,10 +280,20 @@ async def run_scan(cfg: Config) -> ScanResult:
         f"    tokens in/out:      "
         f"{hunt_result.input_tokens_total} / {hunt_result.output_tokens_total}",
         *task_lines,
-        f"  total tokens in/out: "
-        f"{recon_result.input_tokens + hunt_result.input_tokens_total}"
-        f" / "
-        f"{recon_result.output_tokens + hunt_result.output_tokens_total}",
+        "  validate:",
+        f"    findings processed: {validate_result.findings_processed}",
+        f"    confirmed:          {validate_result.findings_confirmed}",
+        f"    rejected:           {validate_result.findings_rejected}",
+        f"    uncertain:          {validate_result.findings_uncertain}",
+        f"    refused:            {validate_result.findings_refused}",
+        f"    budget_exceeded:    {validate_result.findings_budget_exceeded}",
+        f"    errored:            {validate_result.findings_errored}",
+        f"    no_verdict:         {validate_result.findings_no_verdict}",
+        f"    tokens in/out:      "
+        f"{validate_result.input_tokens_total} / "
+        f"{validate_result.output_tokens_total}",
+        *finding_lines,
+        f"  total tokens in/out: {total_in_tokens} / {total_out_tokens}",
         f"  est. cost USD (recon only): {recon_result.cost_usd:.4f}",
     ]
     if recon_result.refusal_text:

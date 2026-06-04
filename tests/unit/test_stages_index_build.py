@@ -76,6 +76,7 @@ async def test_index_build_stage_run_builds_index(isolated_db: Path) -> None:
         model="claude-sonnet-4-5",
         recon_token_budget=1_000_000,
         hunt_token_budget=1_000_000,
+        validate_token_budget=1_000_000,
         auth_env={"ANTHROPIC_API_KEY": "x"},
     )
 
@@ -104,6 +105,7 @@ async def test_index_build_stage_zero_symbols_returns_empty_result(
         model="claude-sonnet-4-5",
         recon_token_budget=1_000_000,
         hunt_token_budget=1_000_000,
+        validate_token_budget=1_000_000,
         auth_env={"ANTHROPIC_API_KEY": "x"},
     )
     result = await ib_stage.run(

@@ -283,6 +283,67 @@ class NotIndexedError(FlosswingError):
 
 
 # -----------------------------------------------------------------------------
+# v0.6 Validate errors (per docs/tool-contracts.md § findings (Validate-side)
+# and docs/specs/2026-06-02-v0.6-validate-design.md § Error and refusal handling)
+#
+# Per plan preamble decision #3 (operator override on 2026-06-03), the
+# defensive byte-level `EvidenceFilesTooLargeError` / `evidence_files_too_large`
+# is NOT implemented. Only the spec's 100-entry list cap
+# (`EvidenceFilesTooManyError`) ships.
+# -----------------------------------------------------------------------------
+
+
+class FindingNotFoundError(FlosswingError):
+    """Per docs/tool-contracts.md § findings (Validate-side) errors.
+
+    Raised by validate_finding when the supplied finding_id does not
+    resolve under the current run. Typically a prompt-injection /
+    hallucination signal; the agent should refuse or stop.
+    """
+
+    code = "finding_not_found"
+    retryable = False
+
+
+class FindingAlreadyValidatedError(FlosswingError):
+    """Per docs/tool-contracts.md § findings (Validate-side) errors.
+
+    Raised by validate_finding when a validations row already exists
+    for the target finding. The UNIQUE constraint on
+    uq_validations_finding_id provides DB-side enforcement; the explicit
+    pre-check produces a friendlier error and a smaller round-trip.
+
+    The agent should treat this as a stop signal, not a retry signal.
+    """
+
+    code = "finding_already_validated"
+    retryable = False
+
+
+class RationaleTooShortError(FlosswingError):
+    """Per docs/tool-contracts.md § findings (Validate-side) errors.
+
+    Raised by validate_finding when len(rationale) < 50. The cap exists
+    to force actual explanation, not 'looks fine.' Retryable: the agent
+    can rewrite a longer rationale and try again.
+    """
+
+    code = "rationale_too_short"
+    retryable = True
+
+
+class EvidenceFilesTooManyError(FlosswingError):
+    """Application-layer list-length cap on validate_finding's
+    evidence_files argument. Per spec § Component responsibilities
+    tools/findings.py — validate_finding, cap=100. Matches the existing
+    fs-side caps in spirit.
+    """
+
+    code = "evidence_files_too_many"
+    retryable = False
+
+
+# -----------------------------------------------------------------------------
 # Credential scrubber
 # -----------------------------------------------------------------------------
 

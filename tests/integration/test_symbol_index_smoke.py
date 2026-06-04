@@ -89,6 +89,7 @@ async def test_symbol_index_smoke_runs_recon_index_hunt_against_v02_smoke(
         model=DEFAULT_MODEL,
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
+        validate_token_budget=200_000,
         auth_env=auth,
     )
     result = await run_scan(cfg)
@@ -165,6 +166,7 @@ async def test_find_definition_returns_greet_via_tool(
         model=DEFAULT_MODEL,
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
+        validate_token_budget=200_000,
         auth_env=auth,
     )
     result = await run_scan(cfg)

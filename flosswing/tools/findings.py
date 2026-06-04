@@ -22,13 +22,17 @@ from flosswing import attack_classes
 from flosswing.errors import (
     DescriptionRequiredForConfirmedError,
     DescriptionTooLargeError,
+    EvidenceFilesTooManyError,
+    FindingAlreadyValidatedError,
+    FindingNotFoundError,
     LineRangeInvalidError,
     PathNotInRepoError,
+    RationaleTooShortError,
     ReconAlreadyRecordedError,
     SuggestedFixTooLargeError,
 )
 from flosswing.state import session as st_session
-from flosswing.state.models import Finding, HuntTask, ReconArtifact
+from flosswing.state.models import Finding, HuntTask, ReconArtifact, Validation
 
 # -----------------------------------------------------------------------------
 # record_recon_artifact
@@ -281,3 +285,236 @@ def record_finding(
             task.findings_count = (task.findings_count or 0) + 1
 
     return RecordFindingOutput(finding_id=finding_id, duplicate_of=None)
+
+
+# -----------------------------------------------------------------------------
+# query_findings  (per docs/tool-contracts.md § findings (Validate-side))
+#
+# Read access to the current run's findings, with optional filters. Available
+# to Validate, Dedupe (agent pass), and Trace per the tool-scope matrix.
+# -----------------------------------------------------------------------------
+
+# Plan-time decision #4 of docs/plans/2026-06-02-v0.6-validate.md.
+_QUERY_FINDINGS_CAP: int = 100
+
+# Severity ordering for the min_severity filter. Lower rank == more severe.
+_SEVERITY_RANK: dict[str, int] = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+    "info": 4,
+}
+
+
+class QueryFindingsInput(BaseModel):
+    finding_id: str | None = None
+    attack_class: str | None = None
+    file: str | None = None
+    status: Literal[
+        "pending_validation", "confirmed", "rejected", "uncertain", "any"
+    ] = "any"
+    min_severity: (
+        Literal["critical", "high", "medium", "low", "info"] | None
+    ) = None
+
+
+class _FindingRow(BaseModel):
+    """The Finding shape returned to the agent.
+
+    Matches docs/tool-contracts.md § findings (Validate-side) `Finding`
+    verbatim. Aliased to a private name in this module because the
+    SQLAlchemy ORM class also named `Finding` is imported here; the
+    public surface is exposed via QueryFindingsOutput.findings.
+
+    Note has_poc_result is a derived boolean over poc_result_json IS NOT
+    NULL — the full JSON blob never leaves the DB through this tool.
+    """
+
+    finding_id: str
+    attack_class: str
+    file: str
+    function: str | None
+    line_start: int
+    line_end: int
+    severity: Literal["critical", "high", "medium", "low", "info"]
+    confidence: Literal["confirmed", "likely", "speculative"]
+    status: Literal[
+        "pending_validation", "confirmed", "rejected", "uncertain"
+    ]
+    title: str
+    description: str
+    poc_code: str | None
+    has_poc_result: bool
+    suggested_fix: str | None
+
+
+class QueryFindingsOutput(BaseModel):
+    findings: list[_FindingRow]
+    truncated: bool
+
+
+def query_findings(
+    inp: QueryFindingsInput, *, run_id: str
+) -> QueryFindingsOutput:
+    """Read findings from the current run, with optional filters.
+
+    Per docs/tool-contracts.md § findings (Validate-side) query_findings.
+    Run scoping is enforced server-side; an agent cannot leak across runs
+    even if it supplies a foreign finding_id.
+
+    Truncation: rows are capped at _QUERY_FINDINGS_CAP (plan-time decision
+    #4). We SELECT cap+1 rows so we can detect overflow without a second
+    COUNT query, then clip and set truncated accordingly.
+    """
+    with st_session.session_scope() as s:
+        stmt = select(Finding).where(Finding.run_id == run_id)
+        if inp.finding_id is not None:
+            stmt = stmt.where(Finding.id == inp.finding_id)
+        if inp.attack_class is not None:
+            stmt = stmt.where(Finding.attack_class == inp.attack_class)
+        if inp.file is not None:
+            stmt = stmt.where(Finding.file == inp.file)
+        if inp.status != "any":
+            stmt = stmt.where(Finding.status == inp.status)
+        rows = (
+            s.execute(stmt.limit(_QUERY_FINDINGS_CAP + 1)).scalars().all()
+        )
+        truncated = len(rows) > _QUERY_FINDINGS_CAP
+        rows = rows[:_QUERY_FINDINGS_CAP]
+        if inp.min_severity is not None:
+            min_rank = _SEVERITY_RANK[inp.min_severity]
+            rows = [
+                r for r in rows
+                if _SEVERITY_RANK.get(r.severity, 99) <= min_rank
+            ]
+        # Materialize inside the session scope; ORM rows expire on exit.
+        out_rows = [
+            _FindingRow(
+                finding_id=r.id,
+                attack_class=r.attack_class,
+                file=r.file,
+                function=r.function,
+                line_start=r.line_start,
+                line_end=r.line_end,
+                # SQLAlchemy Mapped[str] doesn't narrow to the contract's
+                # Literal[...]; insertion-side validation guarantees the
+                # value is always one of the documented literal options.
+                severity=r.severity,  # type: ignore[arg-type]
+                confidence=r.confidence,  # type: ignore[arg-type]
+                status=r.status,  # type: ignore[arg-type]
+                title=r.title,
+                description=r.description,
+                poc_code=r.poc_code,
+                has_poc_result=r.poc_result_json is not None,
+                suggested_fix=r.suggested_fix,
+            )
+            for r in rows
+        ]
+    return QueryFindingsOutput(findings=out_rows, truncated=truncated)
+
+
+# -----------------------------------------------------------------------------
+# validate_finding  (per docs/tool-contracts.md § findings (Validate-side))
+#
+# Per plan preamble decision #3 (operator override on 2026-06-03), the 64 KB
+# byte-level cap on evidence_files_json is NOT implemented. Only the spec's
+# 100-entry list cap (EvidenceFilesTooManyError) ships.
+# -----------------------------------------------------------------------------
+
+_RATIONALE_MIN_CHARS: int = 50
+_EVIDENCE_FILES_MAX_COUNT: int = 100
+
+
+class ValidateFindingInput(BaseModel):
+    finding_id: str
+    verdict: Literal["confirmed", "rejected", "uncertain"]
+    rationale: str
+    evidence_files: list[str] = []
+
+
+class ValidateFindingOutput(BaseModel):
+    finding_id: str
+    new_status: Literal["confirmed", "rejected", "uncertain"]
+
+
+def validate_finding(
+    inp: ValidateFindingInput,
+    *,
+    run_id: str,
+    agent_session_id: str,
+) -> ValidateFindingOutput:
+    """Record an adversarial-review verdict for an existing finding.
+
+    Per docs/tool-contracts.md § findings (Validate-side) validate_finding.
+    Run scoping is enforced server-side; an agent cannot validate findings
+    in other runs even if it hallucinates a foreign finding_id.
+
+    Three-stage validation, in order: (1) input shape (rationale length,
+    evidence_files length); (2) target row exists in this run; (3) no prior
+    validation row exists for this finding. The DB-level UNIQUE on
+    uq_validations_finding_id is belt-and-suspenders against a future
+    parallel-Validate race; for v0.6 sequential it's unreachable on the
+    happy path.
+
+    Per plan-time decision #5, agent_session_id and the binding to one
+    finding flow via wrapper kwargs (and the closed-over finding_id on
+    the input model) — the stage decides which finding gets validated,
+    not the agent.
+    """
+    # Stage 1: input-shape checks.
+    if len(inp.rationale) < _RATIONALE_MIN_CHARS:
+        raise RationaleTooShortError(
+            f"rationale must be >= {_RATIONALE_MIN_CHARS} chars; "
+            f"got {len(inp.rationale)}"
+        )
+    if len(inp.evidence_files) > _EVIDENCE_FILES_MAX_COUNT:
+        raise EvidenceFilesTooManyError(
+            f"evidence_files has {len(inp.evidence_files)} entries "
+            f"(cap={_EVIDENCE_FILES_MAX_COUNT})"
+        )
+    evidence_json = json.dumps(inp.evidence_files)
+
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    # Stages 2 + 3 + write: one transaction.
+    with st_session.session_scope() as s:
+        finding = s.execute(
+            select(Finding).where(
+                Finding.id == inp.finding_id,
+                Finding.run_id == run_id,
+            )
+        ).scalar_one_or_none()
+        if finding is None:
+            raise FindingNotFoundError(
+                f"finding_id={inp.finding_id!r} not found in run "
+                f"{run_id!r}"
+            )
+
+        existing_validation = s.execute(
+            select(Validation).where(Validation.finding_id == inp.finding_id)
+        ).scalar_one_or_none()
+        if existing_validation is not None:
+            raise FindingAlreadyValidatedError(
+                f"finding_id={inp.finding_id!r} already has a "
+                "validations row"
+            )
+
+        validation_id = str(ULID())
+        s.add(
+            Validation(
+                id=validation_id,
+                finding_id=inp.finding_id,
+                verdict=inp.verdict,
+                rationale=inp.rationale,
+                evidence_files_json=evidence_json,
+                agent_session_id=agent_session_id,
+                created_at=now,
+            )
+        )
+        finding.status = inp.verdict
+        finding.validated_at = now
+
+    return ValidateFindingOutput(
+        finding_id=inp.finding_id, new_status=inp.verdict
+    )
