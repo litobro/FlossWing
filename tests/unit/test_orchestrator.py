@@ -17,6 +17,7 @@ import pytest
 from flosswing.config import Config
 from flosswing.stages.hunt import HuntStageResult
 from flosswing.stages.recon import RunReconResult
+from flosswing.stages.validate import ValidateStageResult
 from flosswing.state import session as st_session
 from flosswing.state.models import Run
 
@@ -146,6 +147,7 @@ def test_hunt_runs_when_recon_queued_tasks(
     from flosswing import orchestrator
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
 
     hunt_called = False
 
@@ -157,8 +159,12 @@ def test_hunt_runs_when_recon_queued_tasks(
         hunt_called = True
         return _hunt(processed=2, succeeded=2, findings=3)
 
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(processed=3, confirmed=3)
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     assert hunt_called is True
@@ -195,6 +201,7 @@ def test_summary_contains_per_task_outcomes(
     from flosswing import orchestrator
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
 
     async def fake_recon(**kwargs: object) -> RunReconResult:
         return _recon()
@@ -202,8 +209,12 @@ def test_summary_contains_per_task_outcomes(
     async def fake_hunt(**kwargs: object) -> HuntStageResult:
         return _hunt(processed=2, succeeded=1, refused=1, findings=1)
 
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(processed=1, confirmed=1)
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     # Per spec § Success criteria #3: summary mentions Hunt and findings.
@@ -288,6 +299,7 @@ def test_orchestrator_runs_index_build_between_recon_and_hunt(
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import index_build as index_build_stage
     from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
 
     call_order: list[str] = []
 
@@ -311,12 +323,17 @@ def test_orchestrator_runs_index_build_between_recon_and_hunt(
         call_order.append("hunt")
         return _hunt(processed=1, succeeded=1, findings=1)
 
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        call_order.append("validate")
+        return _validate(processed=1, confirmed=1)
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(index_build_stage, "run", fake_index_build)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
-    assert call_order == ["recon", "index_build", "hunt"]
+    assert call_order == ["recon", "index_build", "hunt", "validate"]
     assert result.exit_code == 0
     # Summary surfaces the index block (per the spec § Component
     # responsibilities orchestrator.run_scan extension).
@@ -405,3 +422,245 @@ def test_orchestrator_skips_index_build_when_recon_artifact_id_missing(
     # Summary should still render the index block with zeros.
     assert "index:" in result.summary
     assert "symbols:           0" in result.summary
+
+
+# ---------------------------------------------------------------------------
+# v0.6 Validate wiring — orchestrator must call stages.validate.run after
+# Hunt when hunt_result.findings_total >= 1 (decision #6: even on partial
+# Hunt failures, as long as >=1 finding landed). Per
+# docs/specs/2026-06-02-v0.6-validate-design.md § orchestrator.run_scan
+# extension.
+# ---------------------------------------------------------------------------
+
+
+def _validate(
+    *,
+    processed: int = 0,
+    confirmed: int = 0,
+    rejected: int = 0,
+    uncertain: int = 0,
+    refused: int = 0,
+    budget: int = 0,
+    errored: int = 0,
+    no_verdict: int = 0,
+    input_tokens_total: int = 0,
+    output_tokens_total: int = 0,
+) -> ValidateStageResult:
+    return ValidateStageResult(
+        findings_processed=processed,
+        findings_confirmed=confirmed,
+        findings_rejected=rejected,
+        findings_uncertain=uncertain,
+        findings_refused=refused,
+        findings_budget_exceeded=budget,
+        findings_errored=errored,
+        findings_no_verdict=no_verdict,
+        input_tokens_total=input_tokens_total,
+        output_tokens_total=output_tokens_total,
+    )
+
+
+def test_orchestrator_runs_validate_when_hunt_produces_findings(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per docs/specs/2026-06-02-v0.6-validate-design.md § orchestrator.run_scan extension."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    validate_called = False
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(
+            processed=1,
+            succeeded=1,
+            findings=2,
+            input_tokens_total=100,
+            output_tokens_total=50,
+        )
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        nonlocal validate_called
+        validate_called = True
+        return _validate(
+            processed=2,
+            confirmed=2,
+            input_tokens_total=200,
+            output_tokens_total=100,
+        )
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert validate_called is True, (
+        "Validate must run when Hunt produces >=1 finding"
+    )
+    assert result.exit_code == 0
+    assert "validate:" in result.summary
+    assert "confirmed:" in result.summary
+    with st_session.session_scope() as s:
+        runs = s.query(Run).all()
+        assert len(runs) == 1
+        assert runs[0].status == "completed"
+        # budget_used includes Validate tokens.
+        # recon (0+0) + hunt (100+50) + validate (200+100) = 450
+        assert runs[0].budget_used == 450
+
+
+def test_orchestrator_skips_validate_when_hunt_produces_no_findings(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hunt produced 0 findings -> Validate skipped, run completed."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    validate_called = False
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(processed=1, succeeded=1, findings=0)
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        nonlocal validate_called
+        validate_called = True
+        return _validate()
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert validate_called is False, (
+        "Validate must NOT run when Hunt produced 0 findings"
+    )
+    # Per spec § orchestrator.run_scan extension: 0 findings -> completed.
+    assert result.exit_code == 0
+    with st_session.session_scope() as s:
+        assert s.query(Run).all()[0].status == "completed"
+
+
+def test_orchestrator_errored_when_all_validate_sessions_non_terminal(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hunt produced >=1 findings AND every Validate session was
+    non-terminal -> errored, exit 1. Per spec § Component
+    responsibilities."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(processed=1, succeeded=1, findings=2)
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        # All Validate sessions non-terminal: 2 refused, 0 terminal.
+        return _validate(processed=2, refused=2)
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert result.exit_code == 1
+    with st_session.session_scope() as s:
+        assert s.query(Run).all()[0].status == "errored"
+
+
+def test_orchestrator_uncertain_counts_as_terminal_verdict(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per plan-time decision #4: UNCERTAIN verdicts count as terminal,
+    so the run still finalizes as `completed`."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(processed=1, succeeded=1, findings=1)
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(processed=1, uncertain=1)
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    # uncertain is a terminal verdict per decision #4.
+    assert result.exit_code == 0
+    with st_session.session_scope() as s:
+        assert s.query(Run).all()[0].status == "completed"
