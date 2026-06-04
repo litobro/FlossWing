@@ -158,6 +158,7 @@ async def run_session(
     stage: str,
     task_id: str | None = None,
     finding_id: str | None = None,
+    agent_session_id: str | None = None,
 ) -> SessionResult:
     """Drive one claude-agent-sdk session and return a structured result.
 
@@ -165,12 +166,15 @@ async def run_session(
     We wrap it into an in-process SDK MCP server and pass it to
     ClaudeAgentOptions.mcp_servers under a single namespace.
 
-    `run_id`, `stage`, `task_id`, `finding_id` are accepted for parity
-    with the stage-side caller (so callers can pass them unconditionally)
-    but are not yet plumbed into the SDK options — they'll be used by
-    later milestones for per-session telemetry tagging.
+    `run_id`, `stage`, `task_id`, `finding_id`, `agent_session_id` are
+    accepted for parity with the stage-side caller (so callers can pass
+    them unconditionally) but are not yet plumbed into the SDK options —
+    they'll be used by later milestones for per-session telemetry tagging.
+    The Validate stage pre-allocates `agent_session_id` so the
+    validate_finding tool wrapper can close over it and write it to the
+    validations row in the same transaction as the verdict.
     """
-    del run_id, stage, task_id, finding_id  # reserved for future telemetry
+    del run_id, stage, task_id, finding_id, agent_session_id
 
     server_config = create_sdk_mcp_server(name="flosswing", tools=tools) if tools else None
     mcp_servers: dict[str, Any] = {"flosswing": server_config} if server_config else {}
