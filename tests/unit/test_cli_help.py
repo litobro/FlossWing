@@ -35,6 +35,14 @@ def test_scan_help_lists_validate_token_budget_flag() -> None:
     assert "--validate-token-budget" in result.output
 
 
+def test_scan_help_lists_gapfill_token_budget_flag() -> None:
+    """Per docs/specs/2026-06-02-v0.7-gapfill-design.md § cli.py extension."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["scan", "--help"])
+    assert result.exit_code == 0
+    assert "--gapfill-token-budget" in result.output
+
+
 def test_scan_help_no_longer_offers_legacy_token_budget() -> None:
     result = CliRunner().invoke(main, ["scan", "--help"])
     assert result.exit_code == 0, result.output

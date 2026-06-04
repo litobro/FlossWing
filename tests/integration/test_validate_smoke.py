@@ -60,6 +60,7 @@ def _resolve_auth_env() -> dict[str, str]:
             recon_token_budget=None,
             hunt_token_budget=None,
             validate_token_budget=None,
+            gapfill_token_budget=None,
         )
     except _AuthMissing:
         return {}
@@ -87,6 +88,7 @@ async def test_validate_smoke_runs_end_to_end_against_v02_smoke(
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
         validate_token_budget=200_000,
+        gapfill_token_budget=200_000,
         auth_env=auth,
     )
     result = await run_scan(cfg)
@@ -213,6 +215,7 @@ async def test_validate_smoke_command_injection_finding_gets_verdict(
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
         validate_token_budget=200_000,
+        gapfill_token_budget=200_000,
         auth_env=auth,
     )
     result = await run_scan(cfg)

@@ -47,14 +47,21 @@ def main() -> None:
     default=None,
     help="Override the per-finding Validate token budget (default 100000).",
 )
+@click.option(
+    "--gapfill-token-budget",
+    type=int,
+    default=None,
+    help="Override the Gapfill token budget (default 50000).",
+)
 def scan(
     path: str,
     model: str | None,
     recon_token_budget: int | None,
     hunt_token_budget: int | None,
     validate_token_budget: int | None,
+    gapfill_token_budget: int | None,
 ) -> None:
-    """Scan a cloned target repository at PATH (Recon -> Hunt -> Validate)."""
+    """Scan a cloned target repository at PATH (Recon -> Hunt -> Validate -> Gapfill)."""
     try:
         cfg = fcfg.resolve(
             repo_root=Path(path),
@@ -62,6 +69,7 @@ def scan(
             recon_token_budget=recon_token_budget,
             hunt_token_budget=hunt_token_budget,
             validate_token_budget=validate_token_budget,
+            gapfill_token_budget=gapfill_token_budget,
         )
     except FlosswingError as e:
         click.echo(e.message, err=True)
