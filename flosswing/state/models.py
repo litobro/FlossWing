@@ -134,7 +134,9 @@ class Finding(Base):
         Text, ForeignKey("findings.id", ondelete="SET NULL"), default=None
     )
     dedupe_cluster_id: Mapped[str | None] = mapped_column(
-        Text, ForeignKey("dedupe_clusters.id"), default=None
+        Text,
+        ForeignKey("dedupe_clusters.id", ondelete="SET NULL"),
+        default=None,
     )
     dedupe_role: Mapped[str | None] = mapped_column(Text, default=None)
     root_cause_summary: Mapped[str | None] = mapped_column(Text, default=None)
