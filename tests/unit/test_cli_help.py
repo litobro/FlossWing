@@ -51,6 +51,24 @@ def test_scan_help_lists_dedupe_token_budget_flag() -> None:
     assert "--dedupe-token-budget" in result.output
 
 
+def test_scan_help_lists_trace_token_budget_flag() -> None:
+    """Per docs/plans/2026-06-04-v0.9-trace.md § Task B."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["scan", "--help"])
+    assert result.exit_code == 0
+    assert "--trace-token-budget" in result.output
+    assert "50000" in result.output
+
+
+def test_scan_help_lists_trace_max_depth_flag() -> None:
+    """Per docs/plans/2026-06-04-v0.9-trace.md § Task B."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["scan", "--help"])
+    assert result.exit_code == 0
+    assert "--trace-max-depth" in result.output
+    assert "default 8" in result.output
+
+
 def test_scan_help_no_longer_offers_legacy_token_budget() -> None:
     result = CliRunner().invoke(main, ["scan", "--help"])
     assert result.exit_code == 0, result.output

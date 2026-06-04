@@ -327,3 +327,73 @@ def test_resolve_uses_cli_dedupe_token_budget_when_passed(
         dedupe_token_budget=33_333,
     )
     assert cfg.dedupe_token_budget == 33_333
+
+
+def test_resolve_uses_default_trace_token_budget_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=None,
+    )
+    assert cfg.trace_token_budget == 50_000
+    assert cfg.trace_token_budget == fcfg.DEFAULT_TRACE_TOKEN_BUDGET
+
+
+def test_resolve_uses_cli_trace_token_budget_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=27_777,
+    )
+    assert cfg.trace_token_budget == 27_777
+
+
+def test_resolve_uses_default_trace_max_depth_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_max_depth=None,
+    )
+    assert cfg.trace_max_depth == 8
+    assert cfg.trace_max_depth == fcfg.DEFAULT_TRACE_MAX_DEPTH
+
+
+def test_resolve_uses_cli_trace_max_depth_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_max_depth=12,
+    )
+    assert cfg.trace_max_depth == 12

@@ -59,6 +59,18 @@ def main() -> None:
     default=None,
     help="Per-cluster Dedupe session token cap (default 50000).",
 )
+@click.option(
+    "--trace-token-budget",
+    type=int,
+    default=None,
+    help="Per-finding Trace session token cap (default 50000).",
+)
+@click.option(
+    "--trace-max-depth",
+    type=int,
+    default=None,
+    help="Maximum find_callers walk depth for Trace (default 8).",
+)
 def scan(
     path: str,
     model: str | None,
@@ -67,6 +79,8 @@ def scan(
     validate_token_budget: int | None,
     gapfill_token_budget: int | None,
     dedupe_token_budget: int | None,
+    trace_token_budget: int | None,
+    trace_max_depth: int | None,
 ) -> None:
     """Scan a cloned target repository at PATH (Recon -> Hunt -> Validate -> Gapfill)."""
     try:
@@ -78,6 +92,8 @@ def scan(
             validate_token_budget=validate_token_budget,
             gapfill_token_budget=gapfill_token_budget,
             dedupe_token_budget=dedupe_token_budget,
+            trace_token_budget=trace_token_budget,
+            trace_max_depth=trace_max_depth,
         )
     except FlosswingError as e:
         click.echo(e.message, err=True)
