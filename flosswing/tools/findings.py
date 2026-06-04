@@ -133,10 +133,48 @@ def add_hunt_task(
     run_id: str,
     source: Literal["recon", "gapfill"],
     budget_total: int,
+    gapfill_new_task_cap: int | None = None,
 ) -> AddHuntTaskOutput:
+    """Enqueue a Hunt task.
+
+    Per docs/tool-contracts.md § Scope: task management. The Pydantic
+    contract surface (AddHuntTaskInput / AddHuntTaskOutput) is unchanged;
+    v0.7 adds a keyword-only Python parameter ``gapfill_new_task_cap``
+    that, when set, enforces the 20%-rule cap on rows with
+    ``source='gapfill'`` for this run.
+
+    Per design decision #1 of docs/specs/2026-06-02-v0.7-gapfill-design.md
+    the cap is ``max(1, recon_task_count // 5)``, computed by the Gapfill
+    stage and passed through. Per plan-time decision #2 of
+    docs/plans/2026-06-04-v0.7-gapfill.md the cap is enforced at the tool
+    layer (in addition to the prompt-side hard cap message). Per plan-time
+    decision #5 the Gapfill cap check precedes the ``budget_total`` check
+    so the operator-facing reason string is the more specific one.
+    """
     attack_classes.validate(inp.attack_class)
 
     with st_session.session_scope() as s:
+        # Gapfill cap: count existing source='gapfill' rows for this run.
+        # Decision #5: this check precedes the budget_total check so the
+        # operator-facing reason is the more specific one when both fire.
+        if gapfill_new_task_cap is not None:
+            existing_gapfill = (
+                s.execute(
+                    select(HuntTask).where(
+                        HuntTask.run_id == run_id,
+                        HuntTask.source == "gapfill",
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if len(existing_gapfill) >= gapfill_new_task_cap:
+                return AddHuntTaskOutput(
+                    task_id="",
+                    accepted=False,
+                    reason="gapfill_cap_reached",
+                )
+
         current = (
             s.execute(select(HuntTask).where(HuntTask.run_id == run_id))
             .scalars()
