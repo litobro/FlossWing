@@ -121,6 +121,8 @@ class Finding(Base):
     poc_result_json: Mapped[str | None] = mapped_column(Text)
     suggested_fix: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(Text)
+    # Validate-managed (added in v0.6):
+    validated_at: Mapped[str | None] = mapped_column(Text, default=None)
     # Dedupe-managed columns (primary_finding_id, dedupe_cluster_id,
     # dedupe_role, root_cause_summary, superseded_at) and Trace-managed
     # (reachable) exist in the schema but are intentionally not mapped
@@ -189,3 +191,29 @@ class EntryPoint(Base):
     # 0 | 1 — cast to bool in the tool layer per § Component responsibilities.
     attacker_controlled_input: Mapped[int] = mapped_column(Integer)
     notes: Mapped[str] = mapped_column(Text, default="")
+
+
+# -----------------------------------------------------------------------------
+# v0.6 Validate model (per docs/specs/2026-06-02-v0.6-validate-design.md
+# § SQLAlchemy models). Table already exists in 001_initial; v0.6 only adds
+# the model. CHECK constraints (ck_validations_verdict,
+# ck_validations_evidence_valid) and the UNIQUE constraint
+# (uq_validations_finding_id) are enforced server-side by SQLite and not
+# duplicated in Python.
+# -----------------------------------------------------------------------------
+
+
+class Validation(Base):
+    __tablename__ = "validations"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    finding_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("findings.id", ondelete="CASCADE")
+    )
+    verdict: Mapped[str] = mapped_column(Text)
+    rationale: Mapped[str] = mapped_column(Text)
+    evidence_files_json: Mapped[str] = mapped_column(Text, default="[]")
+    agent_session_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("agent_sessions.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[str] = mapped_column(Text)
