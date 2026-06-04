@@ -96,6 +96,7 @@ async def test_recon_stage_records_session_and_returns_summary(
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
         validate_token_budget=200_000,
+        gapfill_token_budget=1_000_000,
         auth_env={"ANTHROPIC_API_KEY": "sk-test"},
     )
 

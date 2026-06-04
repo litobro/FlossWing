@@ -14,6 +14,7 @@ from ulid import ULID
 from flosswing import __version__
 from flosswing.config import Config
 from flosswing.index.build import IndexBuildResult
+from flosswing.stages import gapfill as gapfill_stage
 from flosswing.stages import hunt as hunt_stage
 from flosswing.stages import index_build as index_build_stage
 from flosswing.stages import recon as recon_stage
@@ -53,6 +54,12 @@ def _ensure_run_dir(run_id: str) -> Path:
     base = Path.home() / ".flosswing" / "runs" / run_id
     (base / "recon").mkdir(parents=True, exist_ok=True)
     (base / "hunt").mkdir(parents=True, exist_ok=True)
+    # v0.7: Gapfill scratch dir alongside recon/ and hunt/ for symmetry.
+    # Per docs/specs/2026-06-02-v0.7-gapfill-design.md § Component
+    # responsibilities stages/gapfill.py — v0.7 does not write here yet,
+    # but the layout matches the other stages so a future enhancement
+    # (e.g. cached query_run_state JSON) has somewhere to put files.
+    (base / "gapfill").mkdir(parents=True, exist_ok=True)
     return base
 
 
@@ -64,6 +71,7 @@ def _config_for_run_row(cfg: Config) -> str:
         "recon_token_budget": cfg.recon_token_budget,
         "hunt_token_budget": cfg.hunt_token_budget,
         "validate_token_budget": cfg.validate_token_budget,
+        "gapfill_token_budget": cfg.gapfill_token_budget,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)
@@ -142,6 +150,21 @@ async def run_scan(cfg: Config) -> ScanResult:
     else:
         validate_result = validate_stage.ValidateStageResult.skipped()
 
+    # v0.7: Gapfill runs after Validate when Hunt succeeded at least
+    # one task — regardless of findings_total. Per design decision #5
+    # of docs/specs/2026-06-02-v0.7-gapfill-design.md: zero-finding
+    # runs are when Gapfill is most useful, so the gate is
+    # tasks_succeeded >= 1 (not findings_total >= 1).
+    if recon_ok and hunt_result.tasks_succeeded >= 1:
+        gapfill_result = await gapfill_stage.run(
+            run_id=run_id,
+            repo=cfg.repo_root,
+            cfg=cfg,
+            session_factory=st_session.session_factory(),
+        )
+    else:
+        gapfill_result = gapfill_stage.GapfillStageResult.skipped()
+
     # Run finalization (per spec § Component responsibilities
     # orchestrator.run_scan extension):
     #   recon failed                                        -> errored, exit 1
@@ -196,6 +219,8 @@ async def run_scan(cfg: Config) -> ScanResult:
             + hunt_result.output_tokens_total
             + validate_result.input_tokens_total
             + validate_result.output_tokens_total
+            + gapfill_result.input_tokens
+            + gapfill_result.output_tokens
         )
 
     # Build the summary string. Per spec § Success criteria #3:
@@ -246,11 +271,13 @@ async def run_scan(cfg: Config) -> ScanResult:
         recon_result.input_tokens
         + hunt_result.input_tokens_total
         + validate_result.input_tokens_total
+        + gapfill_result.input_tokens
     )
     total_out_tokens = (
         recon_result.output_tokens
         + hunt_result.output_tokens_total
         + validate_result.output_tokens_total
+        + gapfill_result.output_tokens
     )
 
     summary_lines = [
@@ -293,6 +320,12 @@ async def run_scan(cfg: Config) -> ScanResult:
         f"{validate_result.input_tokens_total} / "
         f"{validate_result.output_tokens_total}",
         *finding_lines,
+        "  gapfill:",
+        f"    outcome:            {gapfill_result.outcome}",
+        f"    cap (20% rule):     {gapfill_result.cap}",
+        f"    tasks queued:       {gapfill_result.tasks_queued}",
+        f"    tokens in/out:      "
+        f"{gapfill_result.input_tokens} / {gapfill_result.output_tokens}",
         f"  total tokens in/out: {total_in_tokens} / {total_out_tokens}",
         f"  est. cost USD (recon only): {recon_result.cost_usd:.4f}",
     ]

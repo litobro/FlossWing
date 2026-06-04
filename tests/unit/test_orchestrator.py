@@ -11,10 +11,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from flosswing.config import Config
+from flosswing.stages.gapfill import GapfillStageResult
 from flosswing.stages.hunt import HuntStageResult
 from flosswing.stages.recon import RunReconResult
 from flosswing.stages.validate import ValidateStageResult
@@ -39,6 +41,7 @@ def _cfg(tmp_path: Path) -> Config:
         recon_token_budget=200_000,
         hunt_token_budget=200_000,
         validate_token_budget=200_000,
+        gapfill_token_budget=1_000_000,
         auth_env={"ANTHROPIC_API_KEY": "sk-test"},
     )
 
@@ -145,6 +148,7 @@ def test_hunt_runs_when_recon_queued_tasks(
     fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from flosswing import orchestrator
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import recon as recon_stage
     from flosswing.stages import validate as validate_stage
@@ -162,9 +166,13 @@ def test_hunt_runs_when_recon_queued_tasks(
     async def fake_validate(**kwargs: object) -> ValidateStageResult:
         return _validate(processed=3, confirmed=3)
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
     monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     assert hunt_called is True
@@ -199,6 +207,7 @@ def test_summary_contains_per_task_outcomes(
     fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from flosswing import orchestrator
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import recon as recon_stage
     from flosswing.stages import validate as validate_stage
@@ -212,9 +221,13 @@ def test_summary_contains_per_task_outcomes(
     async def fake_validate(**kwargs: object) -> ValidateStageResult:
         return _validate(processed=1, confirmed=1)
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
     monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     # Per spec § Success criteria #3: summary mentions Hunt and findings.
@@ -234,6 +247,7 @@ def test_budget_used_aggregates_recon_and_hunt_tokens(
     silently undercounting every scan that completed Hunt.
     """
     from flosswing import orchestrator
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import recon as recon_stage
 
@@ -248,8 +262,12 @@ def test_budget_used_aggregates_recon_and_hunt_tokens(
             output_tokens_total=400,
         )
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
 
@@ -296,6 +314,7 @@ def test_orchestrator_runs_index_build_between_recon_and_hunt(
     """IndexBuild must run after Recon and before Hunt when artifact_id set."""
     from flosswing import orchestrator
     from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import index_build as index_build_stage
     from flosswing.stages import recon as recon_stage
@@ -327,13 +346,18 @@ def test_orchestrator_runs_index_build_between_recon_and_hunt(
         call_order.append("validate")
         return _validate(processed=1, confirmed=1)
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        call_order.append("gapfill")
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(index_build_stage, "run", fake_index_build)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
     monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
-    assert call_order == ["recon", "index_build", "hunt", "validate"]
+    assert call_order == ["recon", "index_build", "hunt", "validate", "gapfill"]
     assert result.exit_code == 0
     # Summary surfaces the index block (per the spec § Component
     # responsibilities orchestrator.run_scan extension).
@@ -466,6 +490,7 @@ def test_orchestrator_runs_validate_when_hunt_produces_findings(
     """Per docs/specs/2026-06-02-v0.6-validate-design.md § orchestrator.run_scan extension."""
     from flosswing import orchestrator
     from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import index_build as index_build_stage
     from flosswing.stages import recon as recon_stage
@@ -506,10 +531,14 @@ def test_orchestrator_runs_validate_when_hunt_produces_findings(
             output_tokens_total=100,
         )
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(index_build_stage, "run", fake_index_build)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
     monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     assert validate_called is True, (
@@ -533,6 +562,7 @@ def test_orchestrator_skips_validate_when_hunt_produces_no_findings(
     """Hunt produced 0 findings -> Validate skipped, run completed."""
     from flosswing import orchestrator
     from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import index_build as index_build_stage
     from flosswing.stages import recon as recon_stage
@@ -562,10 +592,14 @@ def test_orchestrator_skips_validate_when_hunt_produces_no_findings(
         validate_called = True
         return _validate()
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(index_build_stage, "run", fake_index_build)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
     monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     assert validate_called is False, (
@@ -585,6 +619,7 @@ def test_orchestrator_errored_when_all_validate_sessions_non_terminal(
     responsibilities."""
     from flosswing import orchestrator
     from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import index_build as index_build_stage
     from flosswing.stages import recon as recon_stage
@@ -611,10 +646,14 @@ def test_orchestrator_errored_when_all_validate_sessions_non_terminal(
         # All Validate sessions non-terminal: 2 refused, 0 terminal.
         return _validate(processed=2, refused=2)
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(index_build_stage, "run", fake_index_build)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
     monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     assert result.exit_code == 1
@@ -629,6 +668,7 @@ def test_orchestrator_uncertain_counts_as_terminal_verdict(
     so the run still finalizes as `completed`."""
     from flosswing import orchestrator
     from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
     from flosswing.stages import hunt as hunt_stage
     from flosswing.stages import index_build as index_build_stage
     from flosswing.stages import recon as recon_stage
@@ -654,13 +694,472 @@ def test_orchestrator_uncertain_counts_as_terminal_verdict(
     async def fake_validate(**kwargs: object) -> ValidateStageResult:
         return _validate(processed=1, uncertain=1)
 
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
     monkeypatch.setattr(recon_stage, "run", fake_recon)
     monkeypatch.setattr(index_build_stage, "run", fake_index_build)
     monkeypatch.setattr(hunt_stage, "run", fake_hunt)
     monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
 
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     # uncertain is a terminal verdict per decision #4.
     assert result.exit_code == 0
     with st_session.session_scope() as s:
         assert s.query(Run).all()[0].status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# v0.7 Gapfill wiring — orchestrator must call stages.gapfill.run after
+# Validate when hunt_result.tasks_succeeded >= 1 (per design decision #5:
+# gate is tasks_succeeded, NOT findings_total, since zero-finding runs are
+# precisely when Gapfill is most useful). Gapfill failure is NOT run-fatal —
+# only Recon / Hunt / IndexBuild / Validate outcomes drive run.status. Per
+# docs/specs/2026-06-02-v0.7-gapfill-design.md § orchestrator.run_scan
+# extension and § Architecture.
+# ---------------------------------------------------------------------------
+
+
+_GapfillOutcome = Literal[
+    "completed", "refused", "budget_exceeded", "errored", "skipped"
+]
+
+
+def _gapfill(
+    *,
+    outcome: _GapfillOutcome = "completed",
+    tasks_queued: int = 0,
+    cap: int = 1,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> GapfillStageResult:
+    return GapfillStageResult(
+        outcome=outcome,
+        tasks_queued=tasks_queued,
+        cap=cap,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+def test_orchestrator_runs_gapfill_when_hunt_tasks_succeeded(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per docs/specs/2026-06-02-v0.7-gapfill-design.md § orchestrator extension."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    gapfill_called = False
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(
+            processed=1,
+            succeeded=1,
+            findings=2,
+            input_tokens_total=100,
+            output_tokens_total=50,
+        )
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(
+            processed=2,
+            confirmed=2,
+            input_tokens_total=200,
+            output_tokens_total=100,
+        )
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        nonlocal gapfill_called
+        gapfill_called = True
+        return _gapfill(
+            outcome="completed",
+            tasks_queued=1,
+            cap=1,
+            input_tokens=300,
+            output_tokens=80,
+        )
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert gapfill_called is True
+    assert result.exit_code == 0
+    assert "gapfill:" in result.summary
+    # Summary surfaces outcome + tasks queued.
+    assert "completed" in result.summary
+    assert "tasks queued" in result.summary or "tasks_queued" in result.summary
+
+
+def test_orchestrator_runs_gapfill_even_with_zero_findings(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per design decision #5: gate on hunt_result.tasks_succeeded >= 1,
+    NOT on findings_total. Zero-finding runs are exactly when Gapfill is
+    most useful — propose new investigations that might surface what the
+    initial Hunt missed."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    validate_called = False
+    gapfill_called = False
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        # Hunt succeeded but produced ZERO findings.
+        return _hunt(
+            processed=1,
+            succeeded=1,
+            findings=0,
+            input_tokens_total=80,
+            output_tokens_total=40,
+        )
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        nonlocal validate_called
+        validate_called = True
+        return _validate()
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        nonlocal gapfill_called
+        gapfill_called = True
+        return _gapfill(
+            outcome="completed",
+            tasks_queued=0,
+            cap=1,
+            input_tokens=200,
+            output_tokens=20,
+        )
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    # Validate is skipped (0 findings); Gapfill runs anyway.
+    assert validate_called is False
+    assert gapfill_called is True
+    # Run completes because Hunt had >=1 task succeed; Gapfill's
+    # zero-tasks_queued outcome is logged but doesn't error the run.
+    assert result.exit_code == 0
+    with st_session.session_scope() as s:
+        assert s.query(Run).all()[0].status == "completed"
+
+
+def test_orchestrator_skips_gapfill_when_hunt_zero_succeeded(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per design decision #5 the gate is hunt_result.tasks_succeeded >= 1.
+    Zero successes -> Gapfill skipped, run errored on the Hunt branch."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+
+    gapfill_called = False
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(
+            processed=1,
+            succeeded=0,
+            refused=1,
+            findings=0,
+            input_tokens_total=80,
+            output_tokens_total=40,
+        )
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        nonlocal gapfill_called
+        gapfill_called = True
+        return _gapfill()
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert gapfill_called is False
+    assert result.exit_code == 1
+    with st_session.session_scope() as s:
+        assert s.query(Run).all()[0].status == "errored"
+
+
+def test_orchestrator_gapfill_refusal_does_not_error_run(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per spec § Architecture: Gapfill failure is NOT run-fatal —
+    Recon + Hunt produced the primary deliverable. A refused Gapfill
+    leaves the run as 'completed' (assuming Validate had a terminal
+    verdict)."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(
+            processed=1,
+            succeeded=1,
+            findings=1,
+            input_tokens_total=80,
+            output_tokens_total=40,
+        )
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(
+            processed=1,
+            confirmed=1,
+            input_tokens_total=200,
+            output_tokens_total=100,
+        )
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill(
+            outcome="refused",
+            tasks_queued=0,
+            cap=1,
+            input_tokens=60,
+            output_tokens=10,
+        )
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    # NOT 1 — Gapfill refusal is not run-fatal.
+    assert result.exit_code == 0
+    with st_session.session_scope() as s:
+        assert s.query(Run).all()[0].status == "completed"
+
+
+def test_orchestrator_summary_includes_gapfill_block(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per spec § Success criteria #3: the printed summary includes a
+    gapfill block with outcome, cap, tasks_queued, and tokens."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(
+            processed=1,
+            succeeded=1,
+            findings=0,
+            input_tokens_total=80,
+            output_tokens_total=40,
+        )
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill(
+            outcome="completed",
+            tasks_queued=2,
+            cap=2,
+            input_tokens=350,
+            output_tokens=90,
+        )
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert "gapfill:" in result.summary
+    # outcome / cap / tasks_queued / tokens should each appear.
+    for needle in ("completed", " 2", "350", "90"):
+        assert needle in result.summary
+
+
+def test_orchestrator_budget_used_includes_gapfill_tokens(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """runs.budget_used must include Gapfill tokens — carryover from
+    the PR #11 review pattern. Every per-stage budget is summed."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()  # input=0, output=0
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4,
+            call_sites=2,
+            entry_points=1,
+            files_parsed=1,
+            files_skipped=0,
+            duration_ms=10,
+            languages=["python"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(
+            processed=1,
+            succeeded=1,
+            findings=1,
+            input_tokens_total=100,
+            output_tokens_total=50,
+        )
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(
+            processed=1,
+            confirmed=1,
+            input_tokens_total=200,
+            output_tokens_total=100,
+        )
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill(
+            outcome="completed",
+            tasks_queued=1,
+            cap=1,
+            input_tokens=300,
+            output_tokens=80,
+        )
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    with st_session.session_scope() as s:
+        runs = s.query(Run).all()
+        assert len(runs) == 1
+        # recon (0+0) + hunt (100+50) + validate (200+100) + gapfill (300+80) = 830
+        assert runs[0].budget_used == 830
+
+
+def test_orchestrator_persists_gapfill_token_budget_in_config_json(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per task spec: _config_for_run_row must include gapfill_token_budget
+    in the persisted JSON (carryover from PR #11 review pattern — every
+    per-stage budget is persisted)."""
+    import json as _json
+
+    from flosswing import orchestrator
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import recon as recon_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        # Short-circuit so the test doesn't need to mock IndexBuild/Hunt/etc.
+        return _recon(outcome="errored", artifact=False, tasks_queued=0)
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt()
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+
+    asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    with st_session.session_scope() as s:
+        row = s.query(Run).all()[0]
+        payload = _json.loads(row.config_json)
+        assert "gapfill_token_budget" in payload
+        assert payload["gapfill_token_budget"] == 1_000_000

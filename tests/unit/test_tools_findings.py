@@ -800,3 +800,226 @@ def test_validate_finding_default_evidence_files_serializes_empty_array(
             select(Validation).where(Validation.finding_id == ids[0])
         ).scalar_one()
         assert v.evidence_files_json == "[]"
+
+
+# ==============================================================================
+# v0.7: add_hunt_task with the Gapfill 20% cap
+# ==============================================================================
+
+
+def _seed_run_with_recon_tasks(count: int) -> str:
+    """Build a Run + N hunt_tasks with source='recon'.
+
+    Uses separate session_scopes per FK level — SQLite FK enforcement is
+    on, so the parent Run must be committed before child hunt_tasks rows
+    flush. Matches the pattern in _seed_run_with_findings above.
+    """
+    run_id = str(ULID())
+    with st_session.session_scope() as s:
+        s.add(
+            Run(
+                id=run_id,
+                target_repo_path="/tmp/x",
+                target_repo_sha=None,
+                depth="standard",
+                budget_total=100,
+                budget_used=0,
+                started_at="2026-06-04T00:00:00Z",
+                status="running",
+                config_json="{}",
+                flosswing_version="0.7.0",
+            )
+        )
+    with st_session.session_scope() as s:
+        for _ in range(count):
+            s.add(
+                HuntTask(
+                    id=str(ULID()),
+                    run_id=run_id,
+                    attack_class="command_injection",
+                    scope_hint="src/",
+                    rationale="",
+                    priority="normal",
+                    source="recon",
+                    parent_finding_id=None,
+                    status="pending",
+                    created_at="2026-06-04T00:00:00Z",
+                    findings_count=0,
+                )
+            )
+    return run_id
+
+
+def test_add_hunt_task_gapfill_cap_zero_existing_accepted(
+    isolated_db: Path,
+) -> None:
+    """First Gapfill task under cap=2: accepted, source='gapfill'."""
+    run_id = _seed_run_with_recon_tasks(10)
+    out = add_hunt_task(
+        AddHuntTaskInput(
+            attack_class="ssrf", scope_hint="src/net/", rationale="r",
+        ),
+        run_id=run_id,
+        source="gapfill",
+        budget_total=100,
+        gapfill_new_task_cap=2,
+    )
+    assert out.accepted is True
+    assert out.reason is None
+    with st_session.session_scope() as s:
+        row = s.get(HuntTask, out.task_id)
+        assert row is not None
+        assert row.source == "gapfill"
+
+
+def test_add_hunt_task_gapfill_cap_at_cap_rejected(
+    isolated_db: Path,
+) -> None:
+    """With cap=2 and 2 existing source='gapfill' rows, the third call
+    returns accepted=False, reason='gapfill_cap_reached'."""
+    run_id = _seed_run_with_recon_tasks(10)
+    with st_session.session_scope() as s:
+        for _ in range(2):
+            s.add(
+                HuntTask(
+                    id=str(ULID()),
+                    run_id=run_id,
+                    attack_class="ssrf",
+                    scope_hint="x",
+                    rationale="",
+                    priority="normal",
+                    source="gapfill",
+                    parent_finding_id=None,
+                    status="pending",
+                    created_at="2026-06-04T00:00:00Z",
+                    findings_count=0,
+                )
+            )
+    out = add_hunt_task(
+        AddHuntTaskInput(
+            attack_class="ssrf", scope_hint="src/", rationale="r",
+        ),
+        run_id=run_id,
+        source="gapfill",
+        budget_total=100,
+        gapfill_new_task_cap=2,
+    )
+    assert out.accepted is False
+    assert out.reason == "gapfill_cap_reached"
+    assert out.task_id == ""
+
+
+def test_add_hunt_task_gapfill_cap_counts_only_gapfill_source(
+    isolated_db: Path,
+) -> None:
+    """The Gapfill cap counts only source='gapfill' rows — pre-existing
+    source='recon' rows are not part of the cap arithmetic."""
+    run_id = _seed_run_with_recon_tasks(50)  # large recon count
+    out = add_hunt_task(
+        AddHuntTaskInput(
+            attack_class="path_traversal",
+            scope_hint="src/",
+            rationale="r",
+        ),
+        run_id=run_id,
+        source="gapfill",
+        budget_total=100,
+        gapfill_new_task_cap=1,  # cap=1, zero existing gapfill rows
+    )
+    assert out.accepted is True
+
+
+def test_add_hunt_task_gapfill_cap_none_disables_check(
+    isolated_db: Path,
+) -> None:
+    """When gapfill_new_task_cap is None (default), the cap check does
+    not fire — Recon-side callers pass None and never see this path."""
+    run_id = _seed_run_with_recon_tasks(0)
+    # Seed 10 source='gapfill' rows even though no Recon rows exist.
+    with st_session.session_scope() as s:
+        for _ in range(10):
+            s.add(
+                HuntTask(
+                    id=str(ULID()),
+                    run_id=run_id,
+                    attack_class="ssrf",
+                    scope_hint="x",
+                    rationale="",
+                    priority="normal",
+                    source="gapfill",
+                    parent_finding_id=None,
+                    status="pending",
+                    created_at="2026-06-04T00:00:00Z",
+                    findings_count=0,
+                )
+            )
+    out = add_hunt_task(
+        AddHuntTaskInput(
+            attack_class="ssrf", scope_hint="src/", rationale="r",
+        ),
+        run_id=run_id,
+        source="gapfill",
+        budget_total=100,
+        gapfill_new_task_cap=None,  # disabled
+    )
+    assert out.accepted is True
+    # 11th gapfill row accepted because the cap check is off.
+
+
+def test_add_hunt_task_gapfill_cap_precedes_budget_total_check(
+    isolated_db: Path,
+) -> None:
+    """If both the Gapfill cap and the global budget_total cap would
+    reject the call, gapfill_cap_reached wins so the operator-facing
+    reason text is the more specific one."""
+    run_id = _seed_run_with_recon_tasks(20)  # already at budget_total=20
+    with st_session.session_scope() as s:
+        # Override: there are 20 recon tasks already (== budget_total).
+        # Add one source='gapfill' row to reach a Gapfill cap of 1.
+        s.add(
+            HuntTask(
+                id=str(ULID()),
+                run_id=run_id,
+                attack_class="ssrf",
+                scope_hint="x",
+                rationale="",
+                priority="normal",
+                source="gapfill",
+                parent_finding_id=None,
+                status="pending",
+                created_at="2026-06-04T00:00:00Z",
+                findings_count=0,
+            )
+        )
+    out = add_hunt_task(
+        AddHuntTaskInput(
+            attack_class="ssrf", scope_hint="src/", rationale="r",
+        ),
+        run_id=run_id,
+        source="gapfill",
+        budget_total=20,           # global cap also exceeded
+        gapfill_new_task_cap=1,    # gapfill cap also at limit
+    )
+    assert out.accepted is False
+    assert out.reason == "gapfill_cap_reached"  # NOT 'budget exhausted'
+
+
+def test_add_hunt_task_recon_path_unchanged(isolated_db: Path) -> None:
+    """The Recon caller's path (source='recon', gapfill_new_task_cap=None)
+    behaves identically to the v0.2 / v0.3 baseline."""
+    run_id = _seed_run_with_recon_tasks(0)
+    out = add_hunt_task(
+        AddHuntTaskInput(
+            attack_class="command_injection",
+            scope_hint="src/",
+            rationale="r",
+        ),
+        run_id=run_id,
+        source="recon",
+        budget_total=20,
+    )
+    assert out.accepted is True
+    with st_session.session_scope() as s:
+        row = s.get(HuntTask, out.task_id)
+        assert row is not None
+        assert row.source == "recon"
