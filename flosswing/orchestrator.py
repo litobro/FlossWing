@@ -14,11 +14,13 @@ from ulid import ULID
 from flosswing import __version__
 from flosswing.config import Config
 from flosswing.index.build import IndexBuildResult
+from flosswing.stages import dedupe as dedupe_stage
 from flosswing.stages import gapfill as gapfill_stage
 from flosswing.stages import hunt as hunt_stage
 from flosswing.stages import index_build as index_build_stage
 from flosswing.stages import recon as recon_stage
 from flosswing.stages import validate as validate_stage
+from flosswing.stages.dedupe import DedupeStageResult
 from flosswing.state import session as st_session
 from flosswing.state.models import Finding, HuntTask, Run, Validation
 
@@ -72,6 +74,7 @@ def _config_for_run_row(cfg: Config) -> str:
         "hunt_token_budget": cfg.hunt_token_budget,
         "validate_token_budget": cfg.validate_token_budget,
         "gapfill_token_budget": cfg.gapfill_token_budget,
+        "dedupe_token_budget": cfg.dedupe_token_budget,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)
@@ -150,6 +153,26 @@ async def run_scan(cfg: Config) -> ScanResult:
     else:
         validate_result = validate_stage.ValidateStageResult.skipped()
 
+    # v0.8: Dedupe runs after Validate when Hunt produced >=1 finding.
+    # Per docs/specs/2026-06-02-v0.8-dedupe-design.md § orchestrator.run_scan
+    # extension: "Dedupe runs only when >= 1 finding exists to consider"
+    # AND "The orchestrator runs Dedupe regardless of Validate's outcome
+    # (Dedupe doesn't require any `confirmed` verdicts to be useful)".
+    # The spec's pseudocode references `validate_result.outcome != "fatal"`,
+    # but ValidateStageResult has no `outcome` field; the canonical
+    # "did Validate produce usable state" predicate is satisfied whenever
+    # Validate did not raise (a raise would have already propagated past
+    # this point), so we gate purely on findings_total > 0 here.
+    if recon_ok and hunt_result.findings_total > 0:
+        dedupe_result = await dedupe_stage.run(
+            run_id=run_id,
+            repo=cfg.repo_root,
+            cfg=cfg,
+            session_factory=st_session.session_factory(),
+        )
+    else:
+        dedupe_result = DedupeStageResult.skipped()
+
     # v0.7: Gapfill runs after Validate when Hunt succeeded at least
     # one task — regardless of findings_total. Per design decision #5
     # of docs/specs/2026-06-02-v0.7-gapfill-design.md: zero-finding
@@ -221,6 +244,8 @@ async def run_scan(cfg: Config) -> ScanResult:
             + validate_result.output_tokens_total
             + gapfill_result.input_tokens
             + gapfill_result.output_tokens
+            + dedupe_result.input_tokens
+            + dedupe_result.output_tokens
         )
 
     # Build the summary string. Per spec § Success criteria #3:
@@ -272,13 +297,56 @@ async def run_scan(cfg: Config) -> ScanResult:
         + hunt_result.input_tokens_total
         + validate_result.input_tokens_total
         + gapfill_result.input_tokens
+        + dedupe_result.input_tokens
     )
     total_out_tokens = (
         recon_result.output_tokens
         + hunt_result.output_tokens_total
         + validate_result.output_tokens_total
         + gapfill_result.output_tokens
+        + dedupe_result.output_tokens
     )
+
+    # v0.8: Dedupe section, printed after Hunt/Validate/Gapfill per
+    # docs/specs/2026-06-02-v0.8-dedupe-design.md § Success criteria #3.
+    # If the stage was skipped (no findings to cluster), emit a single
+    # explanatory line; otherwise emit the full breakdown.
+    if dedupe_result.outcome == "skipped":
+        dedupe_lines: list[str] = [
+            "  dedupe: skipped (no findings to cluster)",
+        ]
+    else:
+        singletons = dedupe_result.clusters_total - dedupe_result.clusters_reviewed
+        dedupe_lines = [
+            "  dedupe:",
+            (
+                f"    clusters_total:     {dedupe_result.clusters_total} "
+                f"(singletons: {singletons}, multi-member: "
+                f"{dedupe_result.clusters_reviewed})"
+            ),
+            f"    clusters_reviewed:  {dedupe_result.clusters_reviewed}",
+            f"    merges_performed:   {dedupe_result.merges_performed}",
+            f"    variants_linked:    {dedupe_result.variants_linked}",
+        ]
+        if dedupe_result.clusters_refused:
+            dedupe_lines.append(
+                f"    clusters_refused:   {dedupe_result.clusters_refused}"
+            )
+        if dedupe_result.clusters_errored:
+            dedupe_lines.append(
+                f"    clusters_errored:   {dedupe_result.clusters_errored}"
+            )
+        dedupe_lines.extend(
+            [
+                (
+                    f"    findings_superseded: "
+                    f"{dedupe_result.findings_superseded} / "
+                    f"{dedupe_result.findings_total}"
+                ),
+                f"    tokens in/out:      "
+                f"{dedupe_result.input_tokens} / {dedupe_result.output_tokens}",
+            ]
+        )
 
     summary_lines = [
         f"Run {run_id} {final_status}.",
@@ -326,6 +394,7 @@ async def run_scan(cfg: Config) -> ScanResult:
         f"    tasks queued:       {gapfill_result.tasks_queued}",
         f"    tokens in/out:      "
         f"{gapfill_result.input_tokens} / {gapfill_result.output_tokens}",
+        *dedupe_lines,
         f"  total tokens in/out: {total_in_tokens} / {total_out_tokens}",
         f"  est. cost USD (recon only): {recon_result.cost_usd:.4f}",
     ]

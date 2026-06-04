@@ -294,3 +294,36 @@ def test_resolve_uses_cli_gapfill_token_budget_when_passed(
         gapfill_token_budget=12_345,
     )
     assert cfg.gapfill_token_budget == 12_345
+
+
+def test_resolve_uses_default_dedupe_token_budget_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+    )
+    assert cfg.dedupe_token_budget == 50_000
+    assert cfg.dedupe_token_budget == fcfg.DEFAULT_DEDUPE_TOKEN_BUDGET
+
+
+def test_resolve_uses_cli_dedupe_token_budget_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=33_333,
+    )
+    assert cfg.dedupe_token_budget == 33_333

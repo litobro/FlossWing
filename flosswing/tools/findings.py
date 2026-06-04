@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from ulid import ULID
 
 from flosswing import attack_classes
@@ -25,14 +25,26 @@ from flosswing.errors import (
     EvidenceFilesTooManyError,
     FindingAlreadyValidatedError,
     FindingNotFoundError,
+    FindingNotInClusterError,
     LineRangeInvalidError,
+    LinkAlreadyExistsError,
     PathNotInRepoError,
+    PrimaryInDuplicatesError,
     RationaleTooShortError,
     ReconAlreadyRecordedError,
+    RootCauseSummaryTooShortError,
+    SameFindingError,
     SuggestedFixTooLargeError,
 )
 from flosswing.state import session as st_session
-from flosswing.state.models import Finding, HuntTask, ReconArtifact, Validation
+from flosswing.state.models import (
+    DedupeCluster,
+    Finding,
+    FindingLink,
+    HuntTask,
+    ReconArtifact,
+    Validation,
+)
 
 # -----------------------------------------------------------------------------
 # record_recon_artifact
@@ -556,3 +568,292 @@ def validate_finding(
     return ValidateFindingOutput(
         finding_id=inp.finding_id, new_status=inp.verdict
     )
+
+
+# -----------------------------------------------------------------------------
+# merge_findings  (per docs/tool-contracts.md § findings (Dedupe-side))
+#
+# Collapses N findings into a single primary, marks duplicates as superseded,
+# and refreshes the dedupe_clusters row defensively. All four validation
+# checks fire in a deterministic order so the agent gets the most specific
+# error first (cheap input-shape checks before any DB round-trip).
+# -----------------------------------------------------------------------------
+
+_ROOT_CAUSE_SUMMARY_MIN_CHARS: int = 50
+
+
+class MergeFindingsInput(BaseModel):
+    primary_finding_id: str
+    duplicate_finding_ids: list[str]
+    root_cause_summary: str
+
+
+class MergeFindingsOutput(BaseModel):
+    primary_finding_id: str
+    merged_count: int
+
+
+def merge_findings(
+    inp: MergeFindingsInput,
+    *,
+    run_id: str,
+) -> MergeFindingsOutput:
+    """Collapse duplicate findings into a single primary.
+
+    Per docs/tool-contracts.md § findings (Dedupe-side) merge_findings.
+    Run scoping is enforced server-side; an agent cannot merge across runs
+    even if it supplies foreign finding ids.
+
+    Validation order (deterministic, cheapest-first so the agent gets the
+    most specific error before any DB round-trip):
+
+    1. ``len(root_cause_summary) < 50`` → RootCauseSummaryTooShortError.
+    2. ``primary_finding_id in duplicate_finding_ids`` →
+       PrimaryInDuplicatesError.
+    3. Primary and every duplicate exist for ``run_id`` →
+       FindingNotFoundError.
+    4. Primary and every duplicate share a non-NULL ``dedupe_cluster_id``
+       equal to primary's → FindingNotInClusterError.
+
+    On success, in one session_scope() transaction: primary gets
+    ``dedupe_role='primary'`` and the supplied ``root_cause_summary``; each
+    duplicate gets ``dedupe_role='duplicate'``,
+    ``primary_finding_id=<primary>``, ``superseded_at=now``,
+    ``status='superseded'``. The matching ``dedupe_clusters`` row is
+    refreshed with the new summary/primary plus a defensive recount of
+    ``member_count`` (SELECT COUNT(*) over findings sharing the cluster id).
+    """
+    # Stage 1: input-shape checks (no DB).
+    if len(inp.root_cause_summary) < _ROOT_CAUSE_SUMMARY_MIN_CHARS:
+        raise RootCauseSummaryTooShortError(
+            f"root_cause_summary must be >= "
+            f"{_ROOT_CAUSE_SUMMARY_MIN_CHARS} chars; "
+            f"got {len(inp.root_cause_summary)}"
+        )
+    if inp.primary_finding_id in inp.duplicate_finding_ids:
+        raise PrimaryInDuplicatesError(
+            f"primary_finding_id={inp.primary_finding_id!r} also appears "
+            "in duplicate_finding_ids"
+        )
+
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    all_ids: list[str] = [inp.primary_finding_id, *inp.duplicate_finding_ids]
+
+    with st_session.session_scope() as s:
+        # Stage 2: existence check for primary + every duplicate.
+        rows = (
+            s.execute(
+                select(Finding).where(
+                    Finding.run_id == run_id,
+                    Finding.id.in_(all_ids),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        by_id: dict[str, Finding] = {r.id: r for r in rows}
+        missing = [fid for fid in all_ids if fid not in by_id]
+        if missing:
+            raise FindingNotFoundError(
+                f"finding_id(s)={missing!r} not found in run {run_id!r}"
+            )
+
+        primary = by_id[inp.primary_finding_id]
+        cluster_id = primary.dedupe_cluster_id
+
+        # Stage 3: cluster-membership check. Primary must already be in a
+        # cluster (Pass 1 assigns it) and every duplicate must share that
+        # exact cluster id. NULL on any side fails.
+        if cluster_id is None:
+            raise FindingNotInClusterError(
+                f"primary_finding_id={inp.primary_finding_id!r} has no "
+                "dedupe_cluster_id"
+            )
+        mismatched = [
+            fid
+            for fid in inp.duplicate_finding_ids
+            if by_id[fid].dedupe_cluster_id != cluster_id
+        ]
+        if mismatched:
+            raise FindingNotInClusterError(
+                f"finding_id(s)={mismatched!r} do not share "
+                f"dedupe_cluster_id={cluster_id!r} with primary "
+                f"{inp.primary_finding_id!r}"
+            )
+
+        # Write side: primary first, then each duplicate, then the cluster
+        # row. session_scope() commits at the end of this block.
+        primary.dedupe_role = "primary"
+        primary.root_cause_summary = inp.root_cause_summary
+
+        for dup_id in inp.duplicate_finding_ids:
+            dup = by_id[dup_id]
+            dup.dedupe_role = "duplicate"
+            dup.primary_finding_id = inp.primary_finding_id
+            dup.superseded_at = now
+            dup.status = "superseded"
+
+        cluster = s.execute(
+            select(DedupeCluster).where(DedupeCluster.id == cluster_id)
+        ).scalar_one_or_none()
+        if cluster is not None:
+            # Defensive recount: trust the DB, not the in-memory count.
+            # The cluster may carry findings outside this merge call (e.g.
+            # a prior partial merge), so we recompute from the source.
+            new_member_count = s.execute(
+                select(func.count())
+                .select_from(Finding)
+                .where(Finding.dedupe_cluster_id == cluster_id)
+            ).scalar_one()
+            cluster.root_cause_summary = inp.root_cause_summary
+            cluster.primary_finding_id = inp.primary_finding_id
+            cluster.member_count = int(new_member_count)
+
+    return MergeFindingsOutput(
+        primary_finding_id=inp.primary_finding_id,
+        merged_count=len(inp.duplicate_finding_ids),
+    )
+
+
+# -----------------------------------------------------------------------------
+# link_variant  (per docs/tool-contracts.md § findings (Dedupe-side))
+#
+# Links two findings as variants of a shared root cause without merging them.
+# The DB-side uq_finding_links_ordered UNIQUE only covers one direction;
+# this tool checks both directions so the agent can't sneak in (b, a) after
+# (a, b).
+# -----------------------------------------------------------------------------
+
+
+class LinkVariantInput(BaseModel):
+    finding_id_a: str
+    finding_id_b: str
+    relationship: Literal["same_root_cause", "exploit_chain", "preconditions"]
+    note: str = ""
+
+
+class LinkVariantOutput(BaseModel):
+    link_id: str
+
+
+def link_variant(
+    inp: LinkVariantInput,
+    *,
+    run_id: str,
+) -> LinkVariantOutput:
+    """Link two findings as variants of a shared root cause.
+
+    Per docs/tool-contracts.md § findings (Dedupe-side) link_variant.
+    Run scoping is enforced server-side; an agent cannot link across runs
+    even if it supplies a foreign finding id.
+
+    Validation order (deterministic, cheapest-first):
+
+    1. ``finding_id_a == finding_id_b`` → SameFindingError (matches the
+       DB-side ck_finding_links_distinct CHECK).
+    2. Both findings exist for ``run_id`` → FindingNotFoundError.
+    3. Both share a non-NULL ``dedupe_cluster_id`` →
+       FindingNotInClusterError (blocks cross-cluster links).
+    4. No existing finding_links row with the same pair (in either
+       direction) AND the same relationship → LinkAlreadyExistsError.
+       The DB-side uq_finding_links_ordered UNIQUE only constrains one
+       direction; we check both with an OR'd pair query.
+
+    On success: generate a ULID link_id, INSERT the finding_links row.
+    For each finding, if its current ``dedupe_role`` IS NULL, set it to
+    ``'variant'``. Existing ``'primary'`` and ``'duplicate'`` roles are
+    preserved (the spec is explicit: don't downgrade).
+    """
+    # Stage 1: input-shape check (no DB).
+    if inp.finding_id_a == inp.finding_id_b:
+        raise SameFindingError(
+            f"finding_id_a == finding_id_b == {inp.finding_id_a!r}"
+        )
+
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    with st_session.session_scope() as s:
+        # Stage 2: existence check for both findings.
+        rows = (
+            s.execute(
+                select(Finding).where(
+                    Finding.run_id == run_id,
+                    Finding.id.in_([inp.finding_id_a, inp.finding_id_b]),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        by_id: dict[str, Finding] = {r.id: r for r in rows}
+        missing = [
+            fid
+            for fid in (inp.finding_id_a, inp.finding_id_b)
+            if fid not in by_id
+        ]
+        if missing:
+            raise FindingNotFoundError(
+                f"finding_id(s)={missing!r} not found in run {run_id!r}"
+            )
+
+        a_finding = by_id[inp.finding_id_a]
+        b_finding = by_id[inp.finding_id_b]
+
+        # Stage 3: shared-cluster check. Both must be in a non-NULL cluster
+        # and both must share the same id.
+        if (
+            a_finding.dedupe_cluster_id is None
+            or b_finding.dedupe_cluster_id is None
+            or a_finding.dedupe_cluster_id != b_finding.dedupe_cluster_id
+        ):
+            raise FindingNotInClusterError(
+                f"finding_id_a={inp.finding_id_a!r} "
+                f"(cluster={a_finding.dedupe_cluster_id!r}) and "
+                f"finding_id_b={inp.finding_id_b!r} "
+                f"(cluster={b_finding.dedupe_cluster_id!r}) do not share "
+                "a non-NULL dedupe_cluster_id"
+            )
+
+        # Stage 4: bidirectional duplicate-link check. The DB UNIQUE only
+        # covers (a, b, rel); we also reject (b, a, rel).
+        existing_link = s.execute(
+            select(FindingLink).where(
+                FindingLink.relationship == inp.relationship,
+                or_(
+                    and_(
+                        FindingLink.finding_id_a == inp.finding_id_a,
+                        FindingLink.finding_id_b == inp.finding_id_b,
+                    ),
+                    and_(
+                        FindingLink.finding_id_a == inp.finding_id_b,
+                        FindingLink.finding_id_b == inp.finding_id_a,
+                    ),
+                ),
+            )
+        ).scalar_one_or_none()
+        if existing_link is not None:
+            raise LinkAlreadyExistsError(
+                f"finding_links row already exists for pair "
+                f"({inp.finding_id_a!r}, {inp.finding_id_b!r}) with "
+                f"relationship={inp.relationship!r}"
+            )
+
+        link_id = str(ULID())
+        s.add(
+            FindingLink(
+                id=link_id,
+                finding_id_a=inp.finding_id_a,
+                finding_id_b=inp.finding_id_b,
+                relationship=inp.relationship,
+                note=inp.note,
+                created_at=now,
+            )
+        )
+
+        # Per spec § merge_findings/link_variant: only promote a NULL role
+        # to 'variant'. Never downgrade 'primary' or 'duplicate'.
+        if a_finding.dedupe_role is None:
+            a_finding.dedupe_role = "variant"
+        if b_finding.dedupe_role is None:
+            b_finding.dedupe_role = "variant"
+
+    return LinkVariantOutput(link_id=link_id)

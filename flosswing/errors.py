@@ -344,6 +344,96 @@ class EvidenceFilesTooManyError(FlosswingError):
 
 
 # -----------------------------------------------------------------------------
+# v0.8 Dedupe errors (per docs/tool-contracts.md § findings (Dedupe-side)
+# and docs/specs/2026-06-02-v0.8-dedupe-design.md § Error and refusal handling)
+#
+# `MergeFindingsError` / `LinkVariantError` are tool-grouping parents so the
+# stage layer can catch all merge or link failures with one except clause.
+# `FindingNotInClusterError` is shared (multiple-inheritance) because both
+# tools raise it with the same semantics: a cross-cluster operation.
+# -----------------------------------------------------------------------------
+
+
+class MergeFindingsError(FlosswingError):
+    """Parent for all merge_findings validation failures.
+
+    Subclasses carry the specific wire code; this base is for ``except``-side
+    grouping in the Dedupe stage.
+    """
+
+
+class LinkVariantError(FlosswingError):
+    """Parent for all link_variant validation failures.
+
+    Subclasses carry the specific wire code; this base is for ``except``-side
+    grouping in the Dedupe stage.
+    """
+
+
+class RootCauseSummaryTooShortError(MergeFindingsError):
+    """Per docs/tool-contracts.md § findings (Dedupe-side) errors.
+
+    Raised by merge_findings when ``len(root_cause_summary) < 50``. Matches
+    the validate_finding rationale cap in spirit — forces actual explanation.
+    Retryable: agent can rewrite a longer summary.
+    """
+
+    code = "root_cause_summary_too_short"
+    retryable = True
+
+
+class PrimaryInDuplicatesError(MergeFindingsError):
+    """Per docs/tool-contracts.md § findings (Dedupe-side) errors.
+
+    Raised by merge_findings when ``primary_finding_id`` appears in
+    ``duplicate_finding_ids``. Indicates a malformed call from the agent.
+    """
+
+    code = "primary_in_duplicates"
+    retryable = False
+
+
+class FindingNotInClusterError(MergeFindingsError, LinkVariantError):
+    """Per docs/tool-contracts.md § findings (Dedupe-side) errors.
+
+    Raised by either dedupe tool when one or more inputs do not share the
+    expected ``dedupe_cluster_id`` (or any of them has a NULL cluster id).
+    Blocks cross-cluster merges and cross-cluster variant links.
+
+    Multiple inheritance from both tool-group parents so ``except
+    MergeFindingsError`` and ``except LinkVariantError`` both catch it.
+    """
+
+    code = "finding_not_in_cluster"
+    retryable = False
+
+
+class SameFindingError(LinkVariantError):
+    """Per docs/tool-contracts.md § findings (Dedupe-side) errors.
+
+    Raised by link_variant when ``finding_id_a == finding_id_b``. Matches
+    the DB-side ``ck_finding_links_distinct`` CHECK constraint with a
+    friendlier message and earlier rejection.
+    """
+
+    code = "same_finding"
+    retryable = False
+
+
+class LinkAlreadyExistsError(LinkVariantError):
+    """Per docs/tool-contracts.md § findings (Dedupe-side) errors.
+
+    Raised by link_variant when a finding_links row already exists for
+    the (a, b, relationship) pair in either direction. The DB-side
+    ``uq_finding_links_ordered`` UNIQUE constraint only covers one
+    direction; the tool layer checks both via UNION-style query.
+    """
+
+    code = "link_already_exists"
+    retryable = False
+
+
+# -----------------------------------------------------------------------------
 # Credential scrubber
 # -----------------------------------------------------------------------------
 

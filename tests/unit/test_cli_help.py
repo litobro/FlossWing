@@ -43,6 +43,14 @@ def test_scan_help_lists_gapfill_token_budget_flag() -> None:
     assert "--gapfill-token-budget" in result.output
 
 
+def test_scan_help_lists_dedupe_token_budget_flag() -> None:
+    """Per docs/specs/2026-06-02-v0.8-dedupe-design.md § cli.py extension."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["scan", "--help"])
+    assert result.exit_code == 0
+    assert "--dedupe-token-budget" in result.output
+
+
 def test_scan_help_no_longer_offers_legacy_token_budget() -> None:
     result = CliRunner().invoke(main, ["scan", "--help"])
     assert result.exit_code == 0, result.output
