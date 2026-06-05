@@ -444,13 +444,44 @@ def _lang_hint_for(file_path: str) -> str:
     return _LANG_HINT.get(Path(file_path).suffix.lower().lstrip("."), "")
 
 
+# Source-file extensions to preserve on the per-finding poc.<ext>
+# filename. Languages we don't recognise fall back to ``.txt`` so the
+# file always has a non-empty extension. .tsx/.jsx normalise to .ts/.js
+# respectively — the language is the same, the JSX is a syntactic
+# superset, and operators expect ``poc.ts`` not ``poc.tsx``.
+_POC_EXT_BY_SOURCE_EXT: dict[str, str] = {
+    "py": ".py", "c": ".c", "h": ".c", "cc": ".cpp", "cpp": ".cpp",
+    "hpp": ".cpp", "cxx": ".cpp", "go": ".go", "rs": ".rs",
+    "ts": ".ts", "tsx": ".ts", "js": ".js", "mjs": ".js", "cjs": ".js",
+    "jsx": ".js", "java": ".java",
+}
+
+
+def _poc_extension_for(source_file_path: str) -> str:
+    """Pick the PoC filename extension for a finding's source file.
+
+    The poc file content is whatever the Hunt agent produced as
+    ``poc_code``; the extension just needs to match the language so
+    syntax highlighters and copy-paste workflows do the right thing.
+    Unknown source extensions fall back to ``.txt`` rather than no
+    extension at all.
+    """
+    suffix = Path(source_file_path).suffix.lower().lstrip(".")
+    return _POC_EXT_BY_SOURCE_EXT.get(suffix, ".txt")
+
+
 def _render_run_header(run: ReportRun) -> str:
     rows = [
         ("target_repo_path", _escape_table_cell(run.target_repo_path)),
         ("status", _escape_table_cell(run.status)),
         ("started_at", _escape_table_cell(run.started_at)),
         ("finished_at", _escape_table_cell(run.finished_at or "")),
-        ("budget_used", f"{run.budget_used} / {run.budget_total}"),
+        # `Run.budget_total` is a legacy default-valued column (literal
+        # 20) and not the actual per-stage budget cap, so showing
+        # "<used> / <budget_total>" mis-conveys "20 tokens budgeted".
+        # Render just the used count; per-stage caps are in
+        # `runs.config_json` for operators who want to compute headroom.
+        ("budget_used", f"{run.budget_used} tokens"),
         ("model", _escape_table_cell(run.model)),
     ]
     lines = ["| Field | Value |", "| --- | --- |"]
@@ -720,10 +751,14 @@ def _write_findings_dirs(
         bytes_written += md_path.stat().st_size
 
         if f.poc_code is not None:
-            # v1.0 lock: filename is always ``poc.py`` regardless of
-            # language. Language-specific extensions are deferred per
-            # the spec's per-finding-directories section.
-            poc_path = d / "poc.py"
+            # Pick the PoC extension off the source file's extension so
+            # a TS finding ends up at ``poc.ts``, not ``poc.py``. The
+            # original v1.0 lock to ``.py`` was a known cosmetic gap
+            # documented in spec § Per-finding directories; this is
+            # the language-aware variant. The fallback is ``.txt`` for
+            # unmapped extensions (the renderer must never write a
+            # zero-suffix path).
+            poc_path = d / f"poc{_poc_extension_for(f.file)}"
             poc_path.write_text(f.poc_code, encoding="utf-8")
             bytes_written += poc_path.stat().st_size
 

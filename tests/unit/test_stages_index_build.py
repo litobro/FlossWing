@@ -119,3 +119,39 @@ async def test_index_build_stage_zero_symbols_returns_empty_result(
         session_factory=st_session.session_factory(),
     )
     assert result.symbols == 0
+
+
+def test_normalize_languages_lowercases_recon_output() -> None:
+    """Recon emits display-cased names like "TypeScript"; the walker
+    filters on lowercase canonical ids from SUPPORTED_LANGUAGES. Mixed
+    case must normalize before reaching the walker, otherwise every
+    file is filtered out (regression from 2026-06-04 SFA scan)."""
+    assert ib_stage._normalize_languages(
+        {"TypeScript", "JavaScript"}
+    ) == {"typescript", "javascript"}
+
+
+def test_normalize_languages_drops_unsupported_ecosystem_hints() -> None:
+    """Recon also emits framework/ecosystem hints like "Vue" or
+    "Dockerfile" that don't map to a tree-sitter grammar. The walker
+    would silently ignore them, but the filter set must drop them
+    explicitly so an all-unsupported input yields the empty set
+    (rather than an opaque "no files matched" outcome)."""
+    assert ib_stage._normalize_languages(
+        {"Vue", "Dockerfile", "TypeScript"}
+    ) == {"typescript"}
+
+
+def test_normalize_languages_empty_set_stays_empty() -> None:
+    """Empty input -> empty output. The orchestrator's
+    `index_build_empty` finalization path is the canonical handler."""
+    assert ib_stage._normalize_languages(set()) == set()
+
+
+def test_normalize_languages_all_unsupported_yields_empty() -> None:
+    """When Recon returns only unsupported languages, we drop them
+    all rather than passing them through and producing an opaque
+    empty walk."""
+    assert ib_stage._normalize_languages(
+        {"Vue", "Dockerfile", "Markdown"}
+    ) == set()
