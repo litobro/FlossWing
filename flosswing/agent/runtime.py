@@ -122,6 +122,55 @@ def _classify(
     )
 
 
+def _api_error_from_result(
+    *,
+    is_error: bool,
+    subtype: str,
+    errors: list[str] | None,
+) -> str | None:
+    """Translate ResultMessage error fields into our ``api_error`` string.
+
+    Returns ``None`` when no error should be propagated.
+
+    Carve-out for the SDK's "spurious is_error" pattern (issue #22):
+    ``is_error=True`` co-existing with ``subtype="success"`` is how
+    ``claude_agent_sdk`` signals "the agent's session ran to
+    completion, but the underlying HTTP call had a transient blip
+    (rate limit, 5xx, etc.)". The ``ResultMessage.api_error_status``
+    field carries the HTTP code in that case. The agent's output is
+    intact and tool calls already landed in the DB; classifying the
+    session as ``errored`` here would mis-bucket a clean run. Return
+    ``None`` instead so the orchestrator finalizes as ``completed``.
+
+    Non-success subtypes (``error_max_turns``, ``error_during_execution``,
+    or anything else) DO propagate as real errors — the ``errors``
+    list is preferred when populated, falling back to a structured
+    ``result_is_error:<subtype>`` sentinel.
+    """
+    if not is_error:
+        return None
+    if subtype == "success":
+        return None
+    errs = errors or []
+    return "; ".join(str(e) for e in errs) or f"result_is_error:{subtype}"
+
+
+def _is_spurious_sdk_exit_error(exc: BaseException) -> bool:
+    """Detect the SDK exception that follows a ``is_error=True`` /
+    ``subtype="success"`` ResultMessage.
+
+    The CLI exits non-zero after emitting that ResultMessage (for
+    shell-script consumers); the SDK wraps the resulting
+    ``ProcessError`` as ``"Claude Code returned an error result:
+    success"`` (see ``_internal/query.py`` in claude_agent_sdk). The
+    agent already finalized cleanly via the ResultMessage we
+    processed; the follow-on exception here is noise. Recognize it by
+    its canonical error text so we don't bucket the session as
+    errored. Issue #22.
+    """
+    return "returned an error result: success" in str(exc)
+
+
 def _harvest_usage(raw: dict[str, Any] | None) -> dict[str, int]:
     """Coerce SDK usage payload to the int-valued dict _classify expects.
 
@@ -208,6 +257,11 @@ async def run_session(
     refusal_text: str | None = None
     tool_calls = 0
     api_error: str | None = None
+    # Tracks the SDK's "is_error=True with subtype='success'" carve-out
+    # (see _api_error_from_result). When set, the follow-on exception
+    # the SDK raises when the CLI exits non-zero is also ignored. Issue
+    # #22.
+    saw_spurious_result_error = False
 
     try:
         async for message in query(prompt=user_prompt, options=options):
@@ -232,9 +286,19 @@ async def run_session(
                 u = _harvest_usage(message.usage)
                 if u:
                     usage = u
-                if message.is_error:
-                    errs = message.errors or []
-                    api_error = api_error or "; ".join(str(e) for e in errs) or "result_is_error"
+                result_err = _api_error_from_result(
+                    is_error=message.is_error,
+                    subtype=message.subtype,
+                    errors=message.errors,
+                )
+                if result_err is not None:
+                    api_error = api_error or result_err
+                elif message.is_error:
+                    # is_error=True but the helper decided it's spurious
+                    # (subtype=="success"). Remember so the except branch
+                    # below doesn't overwrite with the SDK's follow-on
+                    # CLI-exit exception.
+                    saw_spurious_result_error = True
                 # The SDK surfaces refusal text in `result` when stop_reason
                 # indicates a refusal; capture it for the classifier.
                 if message.stop_reason == "refusal" and message.result:
@@ -244,7 +308,12 @@ async def run_session(
             if usage.get("input_tokens", 0) > token_budget:
                 break
     except Exception as e:
-        api_error = f"{type(e).__name__}: {e}"
+        if saw_spurious_result_error or _is_spurious_sdk_exit_error(e):
+            # ResultMessage already finalized the session cleanly; this
+            # follow-on exception is noise (see helper docstring).
+            pass
+        else:
+            api_error = f"{type(e).__name__}: {e}"
 
     classified = _classify(
         stop_reason=stop_reason,
