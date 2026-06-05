@@ -10,7 +10,12 @@ requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "FlossWing contributors" }]
 dependencies = [
-    "claude-agent-sdk",
+    # Min pinned to 0.2.87: that's the version on which the SDK
+    # exposes ResultMessage.subtype="success" co-existing with
+    # is_error=True (and the canonical CLI-exit wrap text), which
+    # flosswing/agent/runtime.py:_api_error_from_result and
+    # _is_spurious_sdk_exit_error depend on (issue #22).
+    "claude-agent-sdk>=0.2.87",
     "click",
     "sqlalchemy",
     "alembic",
