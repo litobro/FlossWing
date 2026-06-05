@@ -36,6 +36,7 @@ from sqlalchemy import select
 
 from flosswing.config import DEFAULT_MODEL, Config
 from flosswing.orchestrator import run_scan
+from flosswing.stages.report import ReportV1
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, Run, Trace
 
@@ -96,6 +97,13 @@ async def test_trace_smoke_runs_end_to_end_against_v02_smoke(
     # trace_max_depth=8 matches the DEFAULT_TRACE_MAX_DEPTH default; pinned here
     # so the assertion on runs.config_json is independent of any future default
     # change.
+    # auto_render=True and output_formats=["md", "json"] are the defaults
+    # per docs/specs/2026-06-02-v1.0-report-design.md § Config, but pinned
+    # here so the assertions on runs.config_json and on rendered artefacts
+    # are independent of any future default change.
+    # output_dir is pinned under tmp_path so pytest cleans it up; the
+    # orchestrator's default would be ~/.flosswing/runs/<run_id>/output/.
+    report_output_dir = tmp_path / "report-output"
     cfg = Config(
         repo_root=CORPUS_REPO.resolve(),
         model=DEFAULT_MODEL,
@@ -106,6 +114,9 @@ async def test_trace_smoke_runs_end_to_end_against_v02_smoke(
         dedupe_token_budget=200_000,
         trace_token_budget=200_000,
         trace_max_depth=8,
+        auto_render=True,
+        output_formats=["md", "json"],
+        output_dir=report_output_dir,
         auth_env=auth,
     )
     result = await run_scan(cfg)
@@ -121,8 +132,8 @@ async def test_trace_smoke_runs_end_to_end_against_v02_smoke(
                 select(Run).where(Run.id == result.run_id)
             ).scalars().all()
         ]
-        finding_rows: list[tuple[str, str, str | None]] = [
-            (f.id, f.status, f.reachable)
+        finding_rows: list[tuple[str, str, str | None, str]] = [
+            (f.id, f.status, f.reachable, f.attack_class)
             for f in s.execute(
                 select(Finding).where(Finding.run_id == result.run_id)
             ).scalars().all()
@@ -190,7 +201,9 @@ async def test_trace_smoke_runs_end_to_end_against_v02_smoke(
     # Without that, the Trace stage is skipped entirely and every assertion
     # below would be vacuously satisfied — a silent regression. Fail loudly.
     confirmed = [
-        fid for fid, status, _reach in finding_rows if status == "confirmed"
+        fid
+        for fid, status, _reach, _ac in finding_rows
+        if status == "confirmed"
     ]
     assert len(confirmed) >= 1, (
         f"test premise violated: v02_smoke produced 0 confirmed findings "
@@ -225,7 +238,7 @@ async def test_trace_smoke_runs_end_to_end_against_v02_smoke(
     # its own findings.reachable matching the trace verdict (record_trace
     # writes both rows in one transaction).
     finding_reachable_by_id: dict[str, str | None] = {
-        fid: reach for fid, _status, reach in finding_rows
+        fid: reach for fid, _status, reach, _ac in finding_rows
     }
     for tid, fid, reachable, _esym, _chain, _rat in trace_rows:
         assert fid in finding_reachable_by_id, (
@@ -259,3 +272,95 @@ async def test_trace_smoke_runs_end_to_end_against_v02_smoke(
             f"trace session {sess_id} has NULL finding_id; expected the "
             "assigned finding id"
         )
+
+    # v1.0 Report assertions per docs/plans/2026-06-04-v1.0-report.md
+    # Task E: the orchestrator auto-rendered the report after run
+    # completion. cfg.output_dir was pinned to tmp_path / "report-output"
+    # above, so that's where the orchestrator should have written.
+    report_output = report_output_dir
+    report_md_path = report_output / "report.md"
+    report_json_path = report_output / "report.json"
+
+    if report_output.exists():
+        output_listing: list[str] | str = sorted(
+            p.name for p in report_output.iterdir()
+        )
+    else:
+        output_listing = "(missing)"
+    assert report_md_path.exists(), (
+        f"expected report.md at {report_md_path}; "
+        f"output_dir contents: {output_listing}"
+    )
+    assert report_json_path.exists(), (
+        f"expected report.json at {report_json_path}; "
+        f"output_dir contents: {output_listing}"
+    )
+
+    # Parse report.json via the canonical model and assert schema_version,
+    # run linkage, and non-empty findings.
+    report = ReportV1.model_validate_json(report_json_path.read_text())
+    assert report.schema_version == "1.0", (
+        f"expected schema_version='1.0', got {report.schema_version!r}"
+    )
+    assert report.run.id == result.run_id, (
+        f"expected report.run.id={result.run_id!r}, got {report.run.id!r}"
+    )
+    assert len(report.findings) >= 1, (
+        f"expected >= 1 finding in report.findings, got "
+        f"{len(report.findings)}"
+    )
+
+    # >= 1 findings/<id>/ directory exists; each has finding.md.
+    findings_root = report_output / "findings"
+    assert findings_root.exists() and findings_root.is_dir(), (
+        f"expected findings/ subdir at {findings_root}"
+    )
+    finding_subdirs = [p for p in findings_root.iterdir() if p.is_dir()]
+    assert len(finding_subdirs) >= 1, (
+        f"expected >= 1 findings/<id>/ subdir, got {len(finding_subdirs)}; "
+        f"contents: {sorted(p.name for p in findings_root.iterdir())}"
+    )
+    for fd in finding_subdirs:
+        finding_md = fd / "finding.md"
+        assert finding_md.exists(), (
+            f"expected {finding_md} to exist; poc.py is optional but "
+            f"finding.md is required for every findings/<id>/ dir"
+        )
+
+    # The CONFIRMED command_injection finding (per the v02_smoke premise
+    # already asserted above) must appear in the JSON findings list with
+    # status='confirmed' AND attack_class='command_injection'. Cross-check
+    # by ID against the DB snapshot so a renamed/renumbered finding shows
+    # as a clear mismatch rather than an opaque attribute miss.
+    confirmed_ci_ids_db = {
+        fid
+        for fid, status, _reach, ac in finding_rows
+        if status == "confirmed" and ac == "command_injection"
+    }
+    assert len(confirmed_ci_ids_db) >= 1, (
+        f"test premise violated: v02_smoke produced 0 confirmed "
+        f"command_injection findings (out of {len(finding_rows)} total). "
+        f"finding_rows={finding_rows}"
+    )
+    confirmed_ci_ids_report = {
+        rf.id
+        for rf in report.findings
+        if rf.attack_class == "command_injection" and rf.status == "confirmed"
+    }
+    assert confirmed_ci_ids_db & confirmed_ci_ids_report, (
+        f"expected at least one confirmed command_injection finding ID "
+        f"to be shared between DB and report.json. db={confirmed_ci_ids_db}, "
+        f"report={confirmed_ci_ids_report}"
+    )
+
+    # runs.config_json carries auto_render and output_formats (v1.0
+    # additions). config was already json.loads()'d above for the v0.9
+    # trace_token_budget / trace_max_depth checks; reuse it here.
+    assert config.get("auto_render") is True, (
+        f"runs.config_json: expected auto_render=True, got "
+        f"{config.get('auto_render')!r}"
+    )
+    assert config.get("output_formats") == ["md", "json"], (
+        f"runs.config_json: expected output_formats=['md','json'], got "
+        f"{config.get('output_formats')!r}"
+    )

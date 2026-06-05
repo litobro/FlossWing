@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import func, or_, select
 from ulid import ULID
 
-from flosswing import __version__
+from flosswing import __version__, errors
 from flosswing.config import Config
 from flosswing.index.build import IndexBuildResult
 from flosswing.stages import dedupe as dedupe_stage
@@ -19,9 +19,11 @@ from flosswing.stages import gapfill as gapfill_stage
 from flosswing.stages import hunt as hunt_stage
 from flosswing.stages import index_build as index_build_stage
 from flosswing.stages import recon as recon_stage
+from flosswing.stages import report as report_stage
 from flosswing.stages import trace as trace_stage
 from flosswing.stages import validate as validate_stage
 from flosswing.stages.dedupe import DedupeStageResult
+from flosswing.stages.report import ReportRenderResult
 from flosswing.stages.trace import TraceStageResult
 from flosswing.state import session as st_session
 from flosswing.state.models import Finding, HuntTask, Run, Validation
@@ -79,6 +81,9 @@ def _config_for_run_row(cfg: Config) -> str:
         "dedupe_token_budget": cfg.dedupe_token_budget,
         "trace_token_budget": cfg.trace_token_budget,
         "trace_max_depth": cfg.trace_max_depth,
+        "auto_render": cfg.auto_render,
+        "output_formats": list(cfg.output_formats),
+        "output_dir": str(cfg.output_dir) if cfg.output_dir is not None else None,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)
@@ -285,6 +290,42 @@ async def run_scan(cfg: Config) -> ScanResult:
             + trace_result.output_tokens
         )
 
+    # v1.0: Report rendering. Runs after the runs row is committed so the
+    # renderer sees final status / budget_used. Per
+    # docs/specs/2026-06-02-v1.0-report-design.md § orchestrator wiring and
+    # docs/plans/2026-06-04-v1.0-report.md Task C: a render failure does
+    # NOT propagate or change final_status — the state DB is the canonical
+    # record; the report is a derived view. Errors are surfaced in the
+    # printed summary (scrubbed) so the operator can re-run
+    # ``flosswing report <run_id>`` to inspect.
+    report_result: ReportRenderResult | None = None
+    report_error_text: str | None = None
+    if cfg.auto_render:
+        output_dir = cfg.output_dir or (
+            Path.home() / ".flosswing" / "runs" / run_id / "output"
+        )
+        try:
+            report_result = report_stage.render(
+                run_id=run_id,
+                session_factory=st_session.session_factory(),
+                output_dir=output_dir,
+                formats=cfg.output_formats,
+            )
+        except Exception as e:
+            # Render failure must NOT fail the run. The state DB is the
+            # canonical record; the report is a derived view. Catch broad
+            # here on purpose — any unexpected exception (DB blip, IO,
+            # programmer error) should leave the run intact and surface
+            # in the printed summary instead.
+            #
+            # Per spec § Error handling: surface as exit 1 even though
+            # final_status stays 'completed' (don't retro-mark the run).
+            # Tells the operator to run `flosswing report <run_id>` to
+            # recover.
+            report_result = None
+            report_error_text = errors.scrub(str(e))
+            exit_code = 1
+
     # Build the summary string. Per spec § Success criteria #3:
     # per-task lines from hunt_tasks + a roll-up footer.
     # Snapshot row attributes inside the session scope; ORM instances
@@ -387,6 +428,34 @@ async def run_scan(cfg: Config) -> ScanResult:
             ]
         )
 
+    # v1.0: Report section, printed after Trace per
+    # docs/specs/2026-06-02-v1.0-report-design.md § orchestrator wiring and
+    # docs/plans/2026-06-04-v1.0-report.md Task C. Three shapes:
+    #   - auto_render disabled       -> single "skipped (--no-report)" line
+    #   - render succeeded           -> full breakdown
+    #   - render raised (tolerated)  -> single "errored — see logs" line
+    if not cfg.auto_render:
+        report_lines: list[str] = ["  report: skipped (--no-report)"]
+    elif report_result is not None:
+        report_lines = [
+            "  report:",
+            f"    output dir:        {report_result.output_dir}",
+            f"    formats:           {','.join(report_result.formats_written)}",
+            f"    findings dirs:     {report_result.findings_dirs_written}",
+            f"    bytes written:     {report_result.bytes_written}",
+        ]
+        if report_result.sarif_skipped:
+            report_lines.append(
+                "    sarif: not yet implemented; tracked in v1.1"
+            )
+    else:
+        # Render raised; scrubbed error captured above. Stay in 'errored —
+        # see logs' shape per Task C even when we have a message to show,
+        # so the summary structure is grep-stable.
+        report_lines = ["  report: errored — see logs"]
+        if report_error_text:
+            report_lines.append(f"    error: {report_error_text}")
+
     # v0.9: Trace section, printed after Dedupe per
     # docs/specs/2026-06-02-v0.9-trace-design.md § Success criteria.
     # If the stage was skipped (no confirmed primaries), emit a single
@@ -470,6 +539,7 @@ async def run_scan(cfg: Config) -> ScanResult:
         f"{gapfill_result.input_tokens} / {gapfill_result.output_tokens}",
         *dedupe_lines,
         *trace_lines,
+        *report_lines,
         f"  total tokens in/out: {total_in_tokens} / {total_out_tokens}",
         f"  est. cost USD (recon only): {recon_result.cost_usd:.4f}",
     ]

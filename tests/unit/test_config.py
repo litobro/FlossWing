@@ -397,3 +397,147 @@ def test_resolve_uses_cli_trace_max_depth_when_passed(
         trace_max_depth=12,
     )
     assert cfg.trace_max_depth == 12
+
+
+def test_resolve_uses_default_auto_render_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per docs/specs/2026-06-02-v1.0-report-design.md § config."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=None,
+        auto_render=None,
+    )
+    assert cfg.auto_render is True
+    assert cfg.auto_render is fcfg.DEFAULT_AUTO_RENDER
+
+
+def test_resolve_uses_cli_auto_render_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=None,
+        auto_render=False,
+    )
+    assert cfg.auto_render is False
+
+
+def test_resolve_uses_default_output_formats_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per docs/specs/2026-06-02-v1.0-report-design.md § config."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=None,
+        output_formats=None,
+    )
+    assert cfg.output_formats == ["md", "json"]
+    assert cfg.output_formats == list(fcfg.DEFAULT_OUTPUT_FORMATS)
+
+
+def test_resolve_uses_cli_output_formats_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=None,
+        output_formats=["md"],
+    )
+    assert cfg.output_formats == ["md"]
+
+
+def test_resolve_output_formats_default_is_independent_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default list is via factory; mutating one Config must not affect others."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg_a = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+    )
+    cfg_b = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+    )
+    cfg_a.output_formats.append("sarif")
+    assert cfg_b.output_formats == ["md", "json"]
+
+
+def test_resolve_uses_default_output_dir_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per docs/specs/2026-06-02-v1.0-report-design.md § config.
+
+    Default is None — resolved to ~/.flosswing/runs/<run_id>/output/ at
+    use site, not in resolve().
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=None,
+        output_dir=None,
+    )
+    assert cfg.output_dir is None
+    assert cfg.output_dir is fcfg.DEFAULT_OUTPUT_DIR
+
+
+def test_resolve_uses_cli_output_dir_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    target = Path("/tmp/some-output")
+    cfg = fcfg.resolve(
+        repo_root=Path("/tmp/x"),
+        model=None,
+        recon_token_budget=None,
+        hunt_token_budget=None,
+        validate_token_budget=None,
+        gapfill_token_budget=None,
+        dedupe_token_budget=None,
+        trace_token_budget=None,
+        output_dir=target,
+    )
+    assert cfg.output_dir == target

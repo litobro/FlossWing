@@ -305,6 +305,19 @@ class FindingNotFoundError(FlosswingError):
     retryable = False
 
 
+class RunNotFoundError(FlosswingError):
+    """Raised by the Report stage when the requested run_id does not exist.
+
+    Per docs/specs/2026-06-02-v1.0-report-design.md § Error handling: the
+    Report stage's loader raises this when ``flosswing report <run_id>`` is
+    invoked with a ULID that isn't in the ``runs`` table. The CLI maps it
+    to exit 2 with a clean "no run with id <…> in state.db" message.
+    """
+
+    code = "run_not_found"
+    retryable = False
+
+
 class FindingAlreadyValidatedError(FlosswingError):
     """Per docs/tool-contracts.md § findings (Validate-side) errors.
 
