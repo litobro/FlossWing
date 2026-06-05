@@ -46,6 +46,9 @@ DEFAULT_GAPFILL_TOKEN_BUDGET: int = 50_000
 DEFAULT_DEDUPE_TOKEN_BUDGET: int = 50_000
 DEFAULT_TRACE_TOKEN_BUDGET: int = 50_000
 DEFAULT_TRACE_MAX_DEPTH: int = 8
+DEFAULT_AUTO_RENDER: bool = True
+DEFAULT_OUTPUT_FORMATS: tuple[str, ...] = ("md", "json")
+DEFAULT_OUTPUT_DIR: Path | None = None
 
 # Direct Anthropic API: just the key.
 _DIRECT_KEYS: tuple[str, ...] = ("ANTHROPIC_API_KEY",)
@@ -85,6 +88,11 @@ class Config:
     dedupe_token_budget: int = DEFAULT_DEDUPE_TOKEN_BUDGET
     trace_token_budget: int = DEFAULT_TRACE_TOKEN_BUDGET
     trace_max_depth: int = DEFAULT_TRACE_MAX_DEPTH
+    auto_render: bool = DEFAULT_AUTO_RENDER
+    output_formats: list[str] = field(
+        default_factory=lambda: list(DEFAULT_OUTPUT_FORMATS)
+    )
+    output_dir: Path | None = DEFAULT_OUTPUT_DIR
 
 
 def _collect_present(keys: tuple[str, ...]) -> dict[str, str]:
@@ -123,6 +131,9 @@ def resolve(
     dedupe_token_budget: int | None = None,
     trace_token_budget: int | None = None,
     trace_max_depth: int | None = None,
+    auto_render: bool | None = None,
+    output_formats: list[str] | None = None,
+    output_dir: Path | None = None,
 ) -> Config:
     """Build a Config from CLI flags + env. Raises if no auth path."""
     auth_env: dict[str, str] = {}
@@ -203,5 +214,16 @@ def resolve(
             trace_max_depth
             if trace_max_depth is not None
             else DEFAULT_TRACE_MAX_DEPTH
+        ),
+        auto_render=(
+            auto_render if auto_render is not None else DEFAULT_AUTO_RENDER
+        ),
+        output_formats=(
+            list(output_formats)
+            if output_formats is not None
+            else list(DEFAULT_OUTPUT_FORMATS)
+        ),
+        output_dir=(
+            output_dir if output_dir is not None else DEFAULT_OUTPUT_DIR
         ),
     )

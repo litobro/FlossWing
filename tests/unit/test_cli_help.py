@@ -86,3 +86,53 @@ def test_scan_rejects_legacy_token_budget_flag() -> None:
         "no such option" in result.output.lower()
         or "unrecognized" in result.output.lower()
     )
+
+
+def test_scan_help_lists_no_report_flag() -> None:
+    """Per docs/specs/2026-06-02-v1.0-report-design.md § cli.py extension."""
+    result = CliRunner().invoke(main, ["scan", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--no-report" in result.output
+
+
+def test_scan_help_lists_format_flag() -> None:
+    """Per docs/specs/2026-06-02-v1.0-report-design.md § cli.py extension."""
+    result = CliRunner().invoke(main, ["scan", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--format" in result.output
+    # Default is md,json — must appear in the help text.
+    assert "md,json" in result.output
+
+
+def test_report_help_exits_zero_and_lists_options() -> None:
+    """`flosswing report --help` lists the new --format and --output-dir."""
+    result = CliRunner().invoke(main, ["report", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--format" in result.output
+    assert "--output-dir" in result.output
+    assert "md,json" in result.output
+
+
+def test_report_subcommand_no_longer_prints_not_implemented_stub() -> None:
+    """The v0.1 stub printed 'not implemented'; that string must be gone."""
+    result = CliRunner().invoke(main, ["report", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "not implemented" not in result.output.lower()
+
+
+def test_scan_rejects_unknown_format() -> None:
+    """`--format xml` is a click usage error."""
+    result = CliRunner().invoke(
+        main, ["scan", "--format", "xml", "."]
+    )
+    assert result.exit_code != 0
+    assert "xml" in result.output.lower() or "format" in result.output.lower()
+
+
+def test_report_rejects_unknown_format() -> None:
+    """`flosswing report --format xml <run>` is a click usage error."""
+    result = CliRunner().invoke(
+        main, ["report", "--format", "xml", "some-run-id"]
+    )
+    assert result.exit_code != 0
+    assert "xml" in result.output.lower() or "format" in result.output.lower()

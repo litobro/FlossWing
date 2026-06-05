@@ -251,12 +251,12 @@ Deterministic. No agent. Reads the SQLite state and renders:
 All output goes to `~/.flosswing/runs/<run_id>/output/`. Operator copies what they want
 out manually.
 
-> **v1.0 scope note (pending implementation):** v1.0 ships `report.md`,
-> `report.json`, and per-finding directories. The `--format sarif` flag is
-> accepted in v1.0 (so existing CI configurations don't break) but emits a
-> placeholder JSON containing only a header comment. Real SARIF 2.1.0 output,
-> hand-rolled without an additional dependency, is targeted for v1.1. See
-> `docs/specs/2026-06-02-v1.0-report-design.md`.
+> **v1.0 scope note:** v1.0 ships `report.md`, `report.json`, and
+> per-finding directories. The `--format sarif` flag is accepted in
+> v1.0 (so existing CI configurations do not break) but emits a
+> placeholder JSON containing only a comment. Real SARIF 2.1.0
+> output, hand-rolled without an additional dependency, is targeted
+> for v1.1.
 
 ## Symbol index
 
