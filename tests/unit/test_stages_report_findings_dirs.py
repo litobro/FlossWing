@@ -277,3 +277,79 @@ def test_findings_root_always_created_even_without_confirmed(
     # No subdirectories were written.
     assert dirs_written == 0
     assert list(findings_root.iterdir()) == []
+
+
+def test_poc_extension_follows_source_file_typescript(
+    isolated_db: Path, tmp_path: Path,
+) -> None:
+    """A TS finding writes ``poc.ts``, not ``poc.py``. Regression from
+    2026-06-04 SFA scan where every PoC landed at ``.py`` regardless
+    of language."""
+    run_id = str(ULID())
+    _seed_run(run_id)
+    task_id = _seed_task(run_id)
+    fid = _seed_finding(
+        run_id=run_id, task_id=task_id, status="confirmed",
+        poc_code="export const exploit = () => {};\n",
+        file="src/api/routes/portal.ts",
+    )
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    report = _load(run_id)
+    report_stage._write_findings_dirs(report, output_dir)
+
+    poc_ts = output_dir / "findings" / fid / "poc.ts"
+    poc_py = output_dir / "findings" / fid / "poc.py"
+    assert poc_ts.exists(), "TS source must produce poc.ts"
+    assert not poc_py.exists()
+    assert poc_ts.read_text(encoding="utf-8").startswith("export const exploit")
+
+
+def test_poc_extension_tsx_normalises_to_ts(
+    isolated_db: Path, tmp_path: Path,
+) -> None:
+    """TSX is the same language as TS; normalise to ``poc.ts`` so the
+    operator can find it without thinking about JSX syntactic sugar."""
+    run_id = str(ULID())
+    _seed_run(run_id)
+    task_id = _seed_task(run_id)
+    fid = _seed_finding(
+        run_id=run_id, task_id=task_id, status="confirmed",
+        poc_code="<Component />\n",
+        file="src/web/Foo.tsx",
+    )
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    report = _load(run_id)
+    report_stage._write_findings_dirs(report, output_dir)
+
+    poc_ts = output_dir / "findings" / fid / "poc.ts"
+    poc_tsx = output_dir / "findings" / fid / "poc.tsx"
+    assert poc_ts.exists()
+    assert not poc_tsx.exists()
+
+
+def test_poc_extension_unknown_source_extension_falls_back_to_txt(
+    isolated_db: Path, tmp_path: Path,
+) -> None:
+    """Source files with unrecognised extensions get ``poc.txt`` so
+    the file always has a non-empty extension (no zero-suffix paths
+    that confuse operators or tooling)."""
+    run_id = str(ULID())
+    _seed_run(run_id)
+    task_id = _seed_task(run_id)
+    fid = _seed_finding(
+        run_id=run_id, task_id=task_id, status="confirmed",
+        poc_code="some opaque content\n",
+        file="config/weird.unknownext",
+    )
+
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    report = _load(run_id)
+    report_stage._write_findings_dirs(report, output_dir)
+
+    poc_txt = output_dir / "findings" / fid / "poc.txt"
+    assert poc_txt.exists()

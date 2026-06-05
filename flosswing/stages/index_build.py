@@ -16,7 +16,26 @@ from pathlib import Path
 
 from flosswing.config import Config
 from flosswing.index.build import IndexBuildResult, build_index
+from flosswing.index.grammars import SUPPORTED_LANGUAGES
 from flosswing.state.session import SessionFactory
+
+
+def _normalize_languages(raw: set[str]) -> set[str]:
+    """Project Recon's free-form language names onto the lowercase
+    canonical identifiers the walker filters on (`SUPPORTED_LANGUAGES`).
+
+    Recon agents have historically emitted display-cased names like
+    "TypeScript", "JavaScript", and ecosystem hints like "Vue" or
+    "Dockerfile" that don't map to a tree-sitter grammar. The walker
+    does exact-string membership against `SUPPORTED_LANGUAGES`, so
+    without normalization every file gets filtered out (observed in
+    the 2026-06-04 SFA scan against a TS/Vue repo — IndexBuild yielded
+    zero symbols and Hunt was skipped). Lowercase everything, then
+    keep only the supported ids. Unsupported entries are dropped
+    silently; the empty-result path remains the orchestrator's
+    `index_build_empty` finalization.
+    """
+    return {lang.lower() for lang in raw} & SUPPORTED_LANGUAGES
 
 
 async def run(
@@ -42,7 +61,7 @@ async def run(
         run_id=run_id,
         recon_artifact_id=recon_artifact_id,
         repo=repo,
-        languages=languages,
+        languages=_normalize_languages(languages),
         session_factory=session_factory,
         scratch_dir=scratch_dir,
     )
