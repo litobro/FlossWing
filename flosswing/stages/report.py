@@ -110,6 +110,13 @@ class ReportRun(BaseModel):
     started_at: str
     finished_at: str | None
     exit_code: int | None
+    # DEPRECATED in schema 1.x: ``budget_total`` is a legacy default-valued
+    # column on the ``runs`` table (literal ``20``) and does NOT represent
+    # the run's actual per-stage budget caps. Consumers should ignore this
+    # field; the canonical per-stage budgets live in
+    # ``config.recon_token_budget``, ``config.hunt_token_budget``, etc. The
+    # field stays in the JSON schema to keep ``schema_version: "1.0"``
+    # backward-compatible; it will be removed in ``schema_version: "2.0"``.
     budget_total: int
     budget_used: int
     model: str
@@ -698,8 +705,9 @@ def _render_json(report: ReportV1) -> str:
 
 def _render_single_finding_md(f: ReportFinding) -> str:
     """Render ``findings/<id>/finding.md`` — title, metadata, description,
-    suggested fix. PoC code lives in a sibling ``poc.py`` per spec
-    § Per-finding directories."""
+    suggested fix. PoC code lives in a sibling ``poc.<ext>`` chosen by
+    :func:`_poc_extension_for` (falls back to ``poc.txt`` for unknown
+    source extensions) per spec § Per-finding directories."""
     lines = [
         f"# {_escape_inline(f.title)}",
         "",
