@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from ulid import ULID
 
 from flosswing import __version__
@@ -19,8 +19,10 @@ from flosswing.stages import gapfill as gapfill_stage
 from flosswing.stages import hunt as hunt_stage
 from flosswing.stages import index_build as index_build_stage
 from flosswing.stages import recon as recon_stage
+from flosswing.stages import trace as trace_stage
 from flosswing.stages import validate as validate_stage
 from flosswing.stages.dedupe import DedupeStageResult
+from flosswing.stages.trace import TraceStageResult
 from flosswing.state import session as st_session
 from flosswing.state.models import Finding, HuntTask, Run, Validation
 
@@ -75,6 +77,8 @@ def _config_for_run_row(cfg: Config) -> str:
         "validate_token_budget": cfg.validate_token_budget,
         "gapfill_token_budget": cfg.gapfill_token_budget,
         "dedupe_token_budget": cfg.dedupe_token_budget,
+        "trace_token_budget": cfg.trace_token_budget,
+        "trace_max_depth": cfg.trace_max_depth,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)
@@ -188,6 +192,37 @@ async def run_scan(cfg: Config) -> ScanResult:
     else:
         gapfill_result = gapfill_stage.GapfillStageResult.skipped()
 
+    # v0.9: Trace runs after Dedupe over confirmed primaries (status =
+    # 'confirmed' AND (dedupe_role IS NULL OR dedupe_role='primary')).
+    # Per docs/specs/2026-06-02-v0.9-trace-design.md § orchestrator
+    # extension. Per-finding failures do NOT promote the run to errored
+    # — Trace is "best effort" coverage data.
+    with st_session.session_scope() as s:
+        trace_eligible_count = int(
+            s.execute(
+                select(func.count())
+                .select_from(Finding)
+                .where(
+                    Finding.run_id == run_id,
+                    Finding.status == "confirmed",
+                    or_(
+                        Finding.dedupe_role.is_(None),
+                        Finding.dedupe_role == "primary",
+                    ),
+                )
+            ).scalar_one()
+        )
+
+    if trace_eligible_count > 0:
+        trace_result = await trace_stage.run(
+            run_id=run_id,
+            repo=cfg.repo_root,
+            cfg=cfg,
+            session_factory=st_session.session_factory(),
+        )
+    else:
+        trace_result = TraceStageResult.skipped()
+
     # Run finalization (per spec § Component responsibilities
     # orchestrator.run_scan extension):
     #   recon failed                                        -> errored, exit 1
@@ -246,6 +281,8 @@ async def run_scan(cfg: Config) -> ScanResult:
             + gapfill_result.output_tokens
             + dedupe_result.input_tokens
             + dedupe_result.output_tokens
+            + trace_result.input_tokens
+            + trace_result.output_tokens
         )
 
     # Build the summary string. Per spec § Success criteria #3:
@@ -298,6 +335,7 @@ async def run_scan(cfg: Config) -> ScanResult:
         + validate_result.input_tokens_total
         + gapfill_result.input_tokens
         + dedupe_result.input_tokens
+        + trace_result.input_tokens
     )
     total_out_tokens = (
         recon_result.output_tokens
@@ -305,6 +343,7 @@ async def run_scan(cfg: Config) -> ScanResult:
         + validate_result.output_tokens_total
         + gapfill_result.output_tokens
         + dedupe_result.output_tokens
+        + trace_result.output_tokens
     )
 
     # v0.8: Dedupe section, printed after Hunt/Validate/Gapfill per
@@ -346,6 +385,41 @@ async def run_scan(cfg: Config) -> ScanResult:
                 f"    tokens in/out:      "
                 f"{dedupe_result.input_tokens} / {dedupe_result.output_tokens}",
             ]
+        )
+
+    # v0.9: Trace section, printed after Dedupe per
+    # docs/specs/2026-06-02-v0.9-trace-design.md § Success criteria.
+    # If the stage was skipped (no confirmed primaries), emit a single
+    # explanatory line; otherwise emit the full breakdown.
+    if trace_result.outcome == "skipped":
+        trace_lines: list[str] = [
+            "  trace: skipped (no confirmed primaries)",
+        ]
+    else:
+        trace_lines = [
+            "  trace:",
+            f"    findings_total:      {trace_result.findings_total}",
+            f"    findings_traced:     {trace_result.findings_traced}",
+            f"    reachable:           {trace_result.findings_reachable}",
+            f"    unreachable:         {trace_result.findings_unreachable}",
+            f"    uncertain:           {trace_result.findings_uncertain}",
+        ]
+        if trace_result.findings_refused:
+            trace_lines.append(
+                f"    refused:             {trace_result.findings_refused}"
+            )
+        if trace_result.findings_errored:
+            trace_lines.append(
+                f"    errored:             {trace_result.findings_errored}"
+            )
+        if trace_result.findings_budget_exceeded:
+            trace_lines.append(
+                f"    budget_exceeded:     "
+                f"{trace_result.findings_budget_exceeded}"
+            )
+        trace_lines.append(
+            f"    tokens in/out:       "
+            f"{trace_result.input_tokens} / {trace_result.output_tokens}"
         )
 
     summary_lines = [
@@ -395,6 +469,7 @@ async def run_scan(cfg: Config) -> ScanResult:
         f"    tokens in/out:      "
         f"{gapfill_result.input_tokens} / {gapfill_result.output_tokens}",
         *dedupe_lines,
+        *trace_lines,
         f"  total tokens in/out: {total_in_tokens} / {total_out_tokens}",
         f"  est. cost USD (recon only): {recon_result.cost_usd:.4f}",
     ]

@@ -434,6 +434,89 @@ class LinkAlreadyExistsError(LinkVariantError):
 
 
 # -----------------------------------------------------------------------------
+# v0.9 Trace errors (per docs/tool-contracts.md § findings (Trace-side)
+# and docs/specs/2026-06-02-v0.9-trace-design.md § Error and refusal handling)
+#
+# `RecordTraceError` is a tool-grouping parent so the stage layer can catch all
+# record_trace failures with one except clause. `FindingNotFoundError` is
+# reused from v0.6.
+# -----------------------------------------------------------------------------
+
+
+class RecordTraceError(FlosswingError):
+    """Parent for all record_trace validation failures.
+
+    Subclasses carry the specific wire code; this base is for ``except``-side
+    grouping in the Trace stage.
+    """
+
+
+class FindingNotTraceableError(RecordTraceError):
+    """Per docs/tool-contracts.md § record_trace.
+
+    Raised by record_trace when the supplied finding_id does not satisfy
+    ``status='confirmed' AND (dedupe_role IS NULL OR dedupe_role='primary')``.
+    Defence-in-depth: the Trace stage's selection query already filters to
+    eligible findings, so this fires only on a malformed call from the agent
+    or a race with another stage.
+    """
+
+    code = "finding_not_traceable"
+    retryable = False
+
+
+class TraceAlreadyExistsError(RecordTraceError):
+    """Per docs/tool-contracts.md § record_trace.
+
+    Raised by record_trace when a traces row already exists for the target
+    finding. The DB-side ``uq_traces_finding_id`` UNIQUE constraint provides
+    server-side enforcement; the explicit pre-check produces a friendlier
+    error and a smaller round-trip.
+    """
+
+    code = "trace_already_exists"
+    retryable = False
+
+
+class InconsistentTraceError(RecordTraceError):
+    """Per docs/tool-contracts.md § record_trace.
+
+    Raised by record_trace when ``reachable=='reachable'`` but
+    ``entry_point_symbol IS NULL``. Matches the DB-side
+    ``ck_traces_reachable_has_entry_point`` CHECK constraint with a friendlier
+    message and earlier rejection. Retryable: the agent can re-emit with the
+    correct shape.
+    """
+
+    code = "inconsistent_trace"
+    retryable = True
+
+
+class EmptyCallChainError(RecordTraceError):
+    """Per docs/tool-contracts.md § record_trace.
+
+    Raised by record_trace when ``len(call_chain) < 1``. The spec requires
+    at least the bug site itself as a step. Retryable: the agent can re-emit
+    with a non-empty call_chain.
+    """
+
+    code = "empty_call_chain"
+    retryable = True
+
+
+class RationaleEmptyError(RecordTraceError):
+    """Per docs/tool-contracts.md § record_trace.
+
+    Raised by record_trace when ``rationale.strip() == ""``. Forces actual
+    explanation, not empty/whitespace-only justification. Retryable: the
+    agent can re-emit with a non-empty rationale.
+    """
+
+    code = "rationale_empty"
+    retryable = True
+
+
+# -----------------------------------------------------------------------------
 # Credential scrubber
 # -----------------------------------------------------------------------------
 

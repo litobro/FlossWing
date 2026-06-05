@@ -44,6 +44,8 @@ DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
 DEFAULT_VALIDATE_TOKEN_BUDGET: int = 100_000
 DEFAULT_GAPFILL_TOKEN_BUDGET: int = 50_000
 DEFAULT_DEDUPE_TOKEN_BUDGET: int = 50_000
+DEFAULT_TRACE_TOKEN_BUDGET: int = 50_000
+DEFAULT_TRACE_MAX_DEPTH: int = 8
 
 # Direct Anthropic API: just the key.
 _DIRECT_KEYS: tuple[str, ...] = ("ANTHROPIC_API_KEY",)
@@ -81,6 +83,8 @@ class Config:
     gapfill_token_budget: int
     auth_env: dict[str, str] = field(default_factory=dict)
     dedupe_token_budget: int = DEFAULT_DEDUPE_TOKEN_BUDGET
+    trace_token_budget: int = DEFAULT_TRACE_TOKEN_BUDGET
+    trace_max_depth: int = DEFAULT_TRACE_MAX_DEPTH
 
 
 def _collect_present(keys: tuple[str, ...]) -> dict[str, str]:
@@ -117,6 +121,8 @@ def resolve(
     validate_token_budget: int | None,
     gapfill_token_budget: int | None,
     dedupe_token_budget: int | None = None,
+    trace_token_budget: int | None = None,
+    trace_max_depth: int | None = None,
 ) -> Config:
     """Build a Config from CLI flags + env. Raises if no auth path."""
     auth_env: dict[str, str] = {}
@@ -187,5 +193,15 @@ def resolve(
             dedupe_token_budget
             if dedupe_token_budget is not None
             else DEFAULT_DEDUPE_TOKEN_BUDGET
+        ),
+        trace_token_budget=(
+            trace_token_budget
+            if trace_token_budget is not None
+            else DEFAULT_TRACE_TOKEN_BUDGET
+        ),
+        trace_max_depth=(
+            trace_max_depth
+            if trace_max_depth is not None
+            else DEFAULT_TRACE_MAX_DEPTH
         ),
     )

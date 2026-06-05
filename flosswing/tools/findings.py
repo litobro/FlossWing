@@ -22,19 +22,24 @@ from flosswing import attack_classes
 from flosswing.errors import (
     DescriptionRequiredForConfirmedError,
     DescriptionTooLargeError,
+    EmptyCallChainError,
     EvidenceFilesTooManyError,
     FindingAlreadyValidatedError,
     FindingNotFoundError,
     FindingNotInClusterError,
+    FindingNotTraceableError,
+    InconsistentTraceError,
     LineRangeInvalidError,
     LinkAlreadyExistsError,
     PathNotInRepoError,
     PrimaryInDuplicatesError,
+    RationaleEmptyError,
     RationaleTooShortError,
     ReconAlreadyRecordedError,
     RootCauseSummaryTooShortError,
     SameFindingError,
     SuggestedFixTooLargeError,
+    TraceAlreadyExistsError,
 )
 from flosswing.state import session as st_session
 from flosswing.state.models import (
@@ -43,8 +48,10 @@ from flosswing.state.models import (
     FindingLink,
     HuntTask,
     ReconArtifact,
+    Trace,
     Validation,
 )
+from flosswing.state.models import EntryPoint as EntryPointModel
 
 # -----------------------------------------------------------------------------
 # record_recon_artifact
@@ -857,3 +864,160 @@ def link_variant(
             b_finding.dedupe_role = "variant"
 
     return LinkVariantOutput(link_id=link_id)
+
+
+# -----------------------------------------------------------------------------
+# record_trace  (per docs/tool-contracts.md § record_trace)
+#
+# Records a reachability trace for a confirmed primary finding. The Trace
+# stage runs one session per eligible finding and the agent emits exactly
+# one record_trace call before exit. All six validation checks fire in a
+# deterministic order so the agent gets the most specific error first
+# (cheap input-shape checks before any DB round-trip).
+# -----------------------------------------------------------------------------
+
+
+class CallChainStep(BaseModel):
+    symbol: str
+    file: str
+    line: int
+    is_entry_point: bool
+    notes: str = ""
+
+
+class RecordTraceInput(BaseModel):
+    finding_id: str
+    reachable: Literal["reachable", "unreachable", "uncertain"]
+    entry_point_symbol: str | None
+    call_chain: list[CallChainStep]
+    rationale: str
+
+
+class RecordTraceOutput(BaseModel):
+    trace_id: str
+
+
+def record_trace(
+    inp: RecordTraceInput,
+    *,
+    run_id: str,
+    agent_session_id: str,
+) -> RecordTraceOutput:
+    """Record a reachability trace for a confirmed primary finding.
+
+    Per docs/tool-contracts.md § record_trace. Run scoping is enforced
+    server-side; an agent cannot record a trace against a finding outside
+    the current run even if it hallucinates a foreign finding_id.
+
+    Validation order (deterministic, cheapest-first so the agent gets the
+    most specific error before any DB round-trip):
+
+    1. ``finding_id`` exists for ``run_id`` → FindingNotFoundError.
+    2. Finding is ``status='confirmed' AND (dedupe_role IS NULL OR
+       dedupe_role='primary')`` → FindingNotTraceableError. Defence-in-
+       depth — the stage's selection query already filters to eligible
+       findings.
+    3. No existing ``traces`` row for this finding → TraceAlreadyExistsError.
+       The DB-side ``uq_traces_finding_id`` UNIQUE is belt-and-suspenders;
+       the explicit pre-check gives a friendlier error than the raw
+       IntegrityError.
+    4. ``reachable=='reachable'`` implies ``entry_point_symbol IS NOT NULL``
+       → InconsistentTraceError. Matches the DB-side
+       ``ck_traces_reachable_has_entry_point`` CHECK.
+    5. ``len(call_chain) >= 1`` → EmptyCallChainError.
+    6. ``rationale.strip() != ""`` → RationaleEmptyError.
+
+    On success, in one ``session_scope()`` transaction:
+
+    - Generate a ULID ``trace_id``.
+    - Resolve ``entry_point_id`` by looking up
+      ``entry_points.symbol == inp.entry_point_symbol`` within ``run_id``.
+      NULL if no match (the schema permits this) or if
+      ``entry_point_symbol`` itself is NULL.
+    - INSERT the ``traces`` row.
+    - UPDATE ``findings.reachable`` to ``inp.reachable`` for the finding.
+    """
+    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    with st_session.session_scope() as s:
+        # Stage 1: existence + run scoping.
+        finding = s.execute(
+            select(Finding).where(
+                Finding.id == inp.finding_id,
+                Finding.run_id == run_id,
+            )
+        ).scalar_one_or_none()
+        if finding is None:
+            raise FindingNotFoundError(
+                f"finding_id={inp.finding_id!r} not found in run {run_id!r}"
+            )
+
+        # Stage 2: traceability — confirmed AND (NULL or primary). Defence
+        # in depth; the Trace stage's selection query is the primary guard.
+        if finding.status != "confirmed" or finding.dedupe_role not in (
+            None,
+            "primary",
+        ):
+            raise FindingNotTraceableError(
+                f"finding_id={inp.finding_id!r} is not traceable: "
+                f"status={finding.status!r}, dedupe_role={finding.dedupe_role!r}"
+            )
+
+        # Stage 3: at-most-one trace per finding.
+        existing_trace = s.execute(
+            select(Trace).where(Trace.finding_id == inp.finding_id)
+        ).scalar_one_or_none()
+        if existing_trace is not None:
+            raise TraceAlreadyExistsError(
+                f"finding_id={inp.finding_id!r} already has a traces row"
+            )
+
+        # Stage 4: reachable→entry_point_symbol consistency.
+        if inp.reachable == "reachable" and inp.entry_point_symbol is None:
+            raise InconsistentTraceError(
+                f"reachable={inp.reachable!r} requires a non-NULL "
+                "entry_point_symbol"
+            )
+
+        # Stage 5: non-empty call chain.
+        if len(inp.call_chain) < 1:
+            raise EmptyCallChainError(
+                "call_chain must contain at least one step"
+            )
+
+        # Stage 6: non-empty rationale (after strip).
+        if inp.rationale.strip() == "":
+            raise RationaleEmptyError(
+                "rationale must be a non-empty string (after strip)"
+            )
+
+        # Resolve entry_point_id: NULL if no symbol provided or no match.
+        entry_point_id: str | None = None
+        if inp.entry_point_symbol is not None:
+            entry_point_id = s.execute(
+                select(EntryPointModel.id).where(
+                    EntryPointModel.symbol == inp.entry_point_symbol,
+                    EntryPointModel.run_id == run_id,
+                )
+            ).scalar_one_or_none()
+
+        trace_id = str(ULID())
+        s.add(
+            Trace(
+                id=trace_id,
+                finding_id=inp.finding_id,
+                reachable=inp.reachable,
+                entry_point_symbol=inp.entry_point_symbol,
+                entry_point_id=entry_point_id,
+                call_chain_json=json.dumps(
+                    [step.model_dump() for step in inp.call_chain],
+                    sort_keys=True,
+                ),
+                rationale=inp.rationale,
+                agent_session_id=agent_session_id,
+                created_at=now,
+            )
+        )
+        finding.reachable = inp.reachable
+
+    return RecordTraceOutput(trace_id=trace_id)

@@ -141,8 +141,11 @@ class Finding(Base):
     dedupe_role: Mapped[str | None] = mapped_column(Text, default=None)
     root_cause_summary: Mapped[str | None] = mapped_column(Text, default=None)
     superseded_at: Mapped[str | None] = mapped_column(Text, default=None)
-    # Trace-managed (reachable) exists in the schema but is intentionally
-    # not mapped here — Trace lands in v0.9.
+    # Trace-managed (added in v0.9). The column already exists in the
+    # schema (001_initial); v0.9 only adds the Python mapping. CHECK
+    # constraint ck_findings_reachable is enforced server-side and not
+    # duplicated in Python.
+    reachable: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 # -----------------------------------------------------------------------------
@@ -272,4 +275,36 @@ class FindingLink(Base):
     )
     relationship: Mapped[str] = mapped_column(Text)
     note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(Text)
+
+
+# -----------------------------------------------------------------------------
+# v0.9 Trace model (per docs/specs/2026-06-02-v0.9-trace-design.md
+# § SQLAlchemy models). Table already exists in 001_initial; v0.9 only adds
+# the model. CHECK constraints (ck_traces_reachable, ck_traces_call_chain_valid,
+# ck_traces_reachable_has_entry_point) and the UNIQUE constraint
+# (uq_traces_finding_id) are enforced server-side by SQLite and not duplicated
+# in Python.
+# -----------------------------------------------------------------------------
+
+
+class Trace(Base):
+    __tablename__ = "traces"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    finding_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("findings.id", ondelete="CASCADE")
+    )
+    reachable: Mapped[str] = mapped_column(Text)
+    entry_point_symbol: Mapped[str | None] = mapped_column(Text, default=None)
+    entry_point_id: Mapped[str | None] = mapped_column(
+        Text,
+        ForeignKey("entry_points.id", ondelete="SET NULL"),
+        default=None,
+    )
+    call_chain_json: Mapped[str] = mapped_column(Text)
+    rationale: Mapped[str] = mapped_column(Text)
+    agent_session_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("agent_sessions.id", ondelete="RESTRICT")
+    )
     created_at: Mapped[str] = mapped_column(Text)

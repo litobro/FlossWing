@@ -220,15 +220,15 @@ dependencies. If a call chain leaves the repo's source tree, mark `uncertain` an
 Tool allowlist: `read_file`, `find_callers`, `find_definition`, `query_entry_points`,
 `record_trace`.
 
-> **v0.9 scope note (pending implementation):** The first Trace plumbing
-> milestone registers `read_file`, `list_dir`, `grep`, `find_definition`,
-> `find_callers`, `query_entry_points`, `query_findings`, `record_trace`. The
-> Tracer walks backwards from the bug site only; forward traces are deferred.
-> Vendored directories (`vendor/`, `node_modules/`, `third_party/`, etc.) are
-> treated as out-of-repo for the "leaves the repo's source tree" rule even when
-> they sit inside the working tree. Walk depth is capped (default 8 hops) via
-> `--trace-max-depth`; cap-exceeded walks emit `uncertain`. Sequential
-> per-finding execution. See `docs/specs/2026-06-02-v0.9-trace-design.md`.
+> **v0.9 scope note:** The first Trace plumbing implementation registers
+> `read_file`, `list_dir`, `grep`, `find_definition`, `find_callers`,
+> `query_entry_points`, `query_findings`, and `record_trace`. The Tracer
+> walks backwards from the bug site only; forward traces are deferred.
+> Vendored directories (`vendor/`, `node_modules/`, `third_party/`, etc.)
+> are treated as out-of-repo for the "leaves the repo's source tree" rule
+> even when they sit inside the working tree. Walk-depth is capped (default
+> 8 hops) via `--trace-max-depth`; cap-exceeded walks emit `uncertain`.
+> Sequential per-finding execution; parallel Trace is its own milestone.
 
 ### Stage 7: Feedback — **DEFERRED to v2**
 
