@@ -17,8 +17,11 @@ SDK shape notes (verified against installed claude-agent-sdk):
 - `query()` yields `UserMessage | AssistantMessage | SystemMessage |
   ResultMessage | StreamEvent | RateLimitEvent`. `ResultMessage` carries
   the terminal fields we care about: `stop_reason`, `usage`, `is_error`,
-  `errors`, `result`. `AssistantMessage` carries per-turn `usage` and
-  `stop_reason` which we also harvest as a fallback / running tally.
+  `subtype`, `errors`, `result`. `subtype` distinguishes the SDK's
+  spurious-error case (`is_error=True`, `subtype="success"`) from real
+  errors (`error_max_turns`, `error_during_execution`) — see
+  `_api_error_from_result`. `AssistantMessage` carries per-turn `usage`
+  and `stop_reason` which we also harvest as a fallback / running tally.
 """
 
 from __future__ import annotations
@@ -120,6 +123,66 @@ def _classify(
         refusal_text=None,
         error_text=None,
     )
+
+
+def _api_error_from_result(
+    *,
+    is_error: bool,
+    subtype: str,
+    errors: list[str] | None,
+) -> str | None:
+    """Translate ResultMessage error fields into our ``api_error`` string.
+
+    Returns ``None`` when no error should be propagated.
+
+    Carve-out for the SDK's "spurious is_error" pattern (issue #22):
+    ``is_error=True`` co-existing with ``subtype="success"`` is how
+    ``claude_agent_sdk`` signals "the agent's session ran to
+    completion, but the underlying HTTP call had a transient blip
+    (rate limit, 5xx, etc.)". The ``ResultMessage.api_error_status``
+    field carries the HTTP code in that case. The agent's output is
+    intact and tool calls already landed in the DB; classifying the
+    session as ``errored`` here would mis-bucket a clean run. Return
+    ``None`` instead so the orchestrator finalizes as ``completed``.
+
+    Non-success subtypes (``error_max_turns``, ``error_during_execution``,
+    or anything else) DO propagate as real errors — the ``errors``
+    list is preferred when populated, falling back to a structured
+    ``result_is_error:<subtype>`` sentinel.
+    """
+    if not is_error:
+        return None
+    if subtype == "success":
+        return None
+    errs = errors or []
+    return "; ".join(str(e) for e in errs) or f"result_is_error:{subtype}"
+
+
+_SPURIOUS_SDK_EXIT_ERROR_TEXT = (
+    "Claude Code returned an error result: success"
+)
+
+
+def _is_spurious_sdk_exit_error(exc: BaseException) -> bool:
+    """Detect the SDK exception that follows a ``is_error=True`` /
+    ``subtype="success"`` ResultMessage.
+
+    The CLI exits non-zero after emitting that ResultMessage (for
+    shell-script consumers); the SDK wraps the resulting
+    ``ProcessError`` as exactly ``"Claude Code returned an error
+    result: success"`` (see ``_internal/query.py`` in
+    claude_agent_sdk). The agent already finalized cleanly via the
+    ResultMessage we processed; the follow-on exception here is
+    noise.
+
+    We anchor on the full canonical string including the ``Claude
+    Code`` prefix so attacker-controlled content (e.g., a finding
+    description, refusal text) that happens to contain the loose
+    substring ``returned an error result: success`` doesn't trigger
+    a false positive and suppress a real exception. Per CLAUDE.md
+    "the target repo is untrusted input". Issue #22.
+    """
+    return _SPURIOUS_SDK_EXIT_ERROR_TEXT in str(exc)
 
 
 def _harvest_usage(raw: dict[str, Any] | None) -> dict[str, int]:
@@ -232,9 +295,18 @@ async def run_session(
                 u = _harvest_usage(message.usage)
                 if u:
                     usage = u
-                if message.is_error:
-                    errs = message.errors or []
-                    api_error = api_error or "; ".join(str(e) for e in errs) or "result_is_error"
+                result_err = _api_error_from_result(
+                    is_error=message.is_error,
+                    subtype=message.subtype,
+                    errors=message.errors,
+                )
+                if result_err is not None:
+                    api_error = api_error or result_err
+                # When is_error=True with subtype="success" (the spurious
+                # SDK case), _api_error_from_result returns None — we
+                # deliberately do NOT promote that to api_error. The CLI
+                # will exit non-zero next, raising an exception we catch
+                # below via _is_spurious_sdk_exit_error. Issue #22.
                 # The SDK surfaces refusal text in `result` when stop_reason
                 # indicates a refusal; capture it for the classifier.
                 if message.stop_reason == "refusal" and message.result:
@@ -244,7 +316,17 @@ async def run_session(
             if usage.get("input_tokens", 0) > token_budget:
                 break
     except Exception as e:
-        api_error = f"{type(e).__name__}: {e}"
+        # Only suppress when the exception text matches the SDK's
+        # canonical "Claude Code returned an error result: success"
+        # wrap (issue #22). A flag-based suppression (set during the
+        # ResultMessage branch) was rejected: it would also swallow
+        # unrelated exceptions raised after the spurious ResultMessage
+        # (e.g., asyncio.CancelledError, connection drops). Requiring
+        # the canonical text keeps the carve-out tightly scoped.
+        if _is_spurious_sdk_exit_error(e):
+            pass
+        else:
+            api_error = f"{type(e).__name__}: {e}"
 
     classified = _classify(
         stop_reason=stop_reason,
