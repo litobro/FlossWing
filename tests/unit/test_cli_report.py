@@ -201,10 +201,12 @@ def test_report_subcommand_rerender_parity(
     assert _without_rendered_at(md_1) == _without_rendered_at(md_2)
 
 
-def test_report_subcommand_unknown_run_id_exits_one(
+def test_report_subcommand_unknown_run_id_exits_two(
     isolated_db: Path, tmp_path: Path,
 ) -> None:
-    """An unknown run_id exits 1 with a clear stderr message."""
+    """An unknown run_id exits 2 with the canonical 'no run with id ...'
+    message, per spec § Error handling and RunNotFoundError docstring.
+    Distinct from exit 1 (which is reserved for render-time failures)."""
     # Touch the DB to ensure migrations have run, so the runs table is
     # present and just-plain-empty rather than "no such table".
     with st_session.session_scope() as _:
@@ -216,8 +218,8 @@ def test_report_subcommand_unknown_run_id_exits_one(
     result = runner.invoke(
         main, ["report", "--output-dir", str(out_dir), bogus],
     )
-    assert result.exit_code == 1, (result.output, result.stderr)
-    assert "unknown run_id" in result.stderr
+    assert result.exit_code == 2, (result.output, result.stderr)
+    assert "no run with id" in result.stderr
     assert bogus in result.stderr
 
 
@@ -244,11 +246,13 @@ def test_report_subcommand_format_md_skips_json(
     assert not (out_dir / "report.json").exists()
 
 
-def test_report_subcommand_sarif_continues_with_stub(
+def test_report_subcommand_sarif_writes_placeholder_file(
     isolated_db: Path, tmp_path: Path,
 ) -> None:
-    """``--format md,json,sarif`` prints the SARIF stub to stderr but
-    still writes report.md AND report.json."""
+    """``--format md,json,sarif`` prints the SARIF stub to stderr AND
+    writes a placeholder ``report.sarif`` file containing a single
+    $comment field (per spec § SARIF stance, so existing CI scripts
+    don't break). report.md and report.json are also written."""
     run_id = str(ULID())
     _seed_simple_run_with_one_finding(run_id)
 
@@ -267,3 +271,9 @@ def test_report_subcommand_sarif_continues_with_stub(
     assert "not yet implemented" in result.stderr
     assert (out_dir / "report.md").exists()
     assert (out_dir / "report.json").exists()
+    sarif_path = out_dir / "report.sarif"
+    assert sarif_path.exists(), "spec § SARIF stance requires the placeholder file"
+    sarif_text = sarif_path.read_text(encoding="utf-8")
+    assert '"$comment"' in sarif_text
+    assert "not yet implemented" in sarif_text
+    assert "v1.1" in sarif_text

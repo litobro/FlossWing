@@ -199,18 +199,30 @@ def report(run_id: str, format_: str, output_dir: str | None) -> None:
 
     with st_session.session_scope() as s:
         if s.get(Run, run_id) is None:
-            click.echo(f"unknown run_id: {run_id}", err=True)
-            sys.exit(1)
+            # Spec § Error handling (and RunNotFoundError docstring) require
+            # exit 2 + the canonical message here. Distinguishes "no such
+            # run" from generic render failures (exit 1).
+            click.echo(f"no run with id {run_id} in state.db", err=True)
+            sys.exit(2)
 
     resolved_dir = cfg.output_dir or (
         Path.home() / ".flosswing" / "runs" / run_id / "output"
     )
-    result = report_stage.render(
-        run_id=run_id,
-        session_factory=st_session.session_factory(),
-        output_dir=resolved_dir,
-        formats=cfg.output_formats,
-    )
+    try:
+        result = report_stage.render(
+            run_id=run_id,
+            session_factory=st_session.session_factory(),
+            output_dir=resolved_dir,
+            formats=cfg.output_formats,
+        )
+    except Exception as e:
+        # Per CLAUDE.md hard rule + spec § Error handling: scrub before
+        # writing to stderr. Mirrors the orchestrator's auto-render
+        # error-handling path.
+        from flosswing import errors as _errors
+
+        click.echo(f"report render failed: {_errors.scrub(str(e))}", err=True)
+        sys.exit(1)
     click.echo(
         f"Wrote {len(result.formats_written)} format(s) to {result.output_dir}"
     )

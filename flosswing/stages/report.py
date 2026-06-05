@@ -776,9 +776,20 @@ def render(
             bytes_written += path.stat().st_size
             formats_written.append("json")
         elif fmt == "sarif":
-            # Per spec § SARIF stance: shim only. Print and continue.
+            # Per spec § SARIF stance: write a placeholder report.sarif
+            # file containing exactly one `$comment` field, plus emit a
+            # stderr notice. The file exists so existing CI configs that
+            # ask for SARIF don't error; they just get a placeholder
+            # until v1.1 ships real SARIF 2.1.0 output.
             import sys
 
+            placeholder = (
+                '{"$comment": "sarif output is not yet implemented; '
+                'tracked in v1.1"}\n'
+            )
+            sarif_path = output_dir / "report.sarif"
+            sarif_path.write_text(placeholder, encoding="utf-8")
+            bytes_written += sarif_path.stat().st_size
             sys.stderr.write(
                 "sarif: not yet implemented; tracked in v1.1\n"
             )

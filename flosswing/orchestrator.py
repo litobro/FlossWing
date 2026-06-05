@@ -81,6 +81,9 @@ def _config_for_run_row(cfg: Config) -> str:
         "dedupe_token_budget": cfg.dedupe_token_budget,
         "trace_token_budget": cfg.trace_token_budget,
         "trace_max_depth": cfg.trace_max_depth,
+        "auto_render": cfg.auto_render,
+        "output_formats": list(cfg.output_formats),
+        "output_dir": str(cfg.output_dir) if cfg.output_dir is not None else None,
         "auth_modes": sorted(cfg.auth_env.keys()),  # KEY NAMES only, never values
     }
     return json.dumps(payload, sort_keys=True)
@@ -314,8 +317,14 @@ async def run_scan(cfg: Config) -> ScanResult:
             # here on purpose — any unexpected exception (DB blip, IO,
             # programmer error) should leave the run intact and surface
             # in the printed summary instead.
+            #
+            # Per spec § Error handling: surface as exit 1 even though
+            # final_status stays 'completed' (don't retro-mark the run).
+            # Tells the operator to run `flosswing report <run_id>` to
+            # recover.
             report_result = None
             report_error_text = errors.scrub(str(e))
+            exit_code = 1
 
     # Build the summary string. Per spec § Success criteria #3:
     # per-task lines from hunt_tasks + a roll-up footer.
