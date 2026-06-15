@@ -191,3 +191,57 @@ async def test_finding_detail_renders_poc(seeded_db: str) -> None:
         rendered = str(body.content)
         assert "Command injection" in rendered
         assert "pwned" in rendered  # poc result rendered
+
+
+@pytest.mark.asyncio
+async def test_findings_table_renders_markup_literally(seeded_db: str) -> None:
+    """Untrusted finding titles must not be interpreted as Rich markup.
+
+    DataTable parses Rich markup in plain-str cells; the findings screen
+    defends against this by wrapping repo-derived strings in rich.text.Text.
+    Seed a title containing markup and assert it survives to the rendered cell.
+    """
+    from rich.style import Style
+
+    from flosswing.tui.screens.findings import FindingsScreen
+
+    with st_session.session_scope() as s:
+        s.add(
+            Finding(
+                id="find-markup",
+                run_id=seeded_db,
+                hunt_task_id="task-1",
+                attack_class="command_injection",
+                file="src/y.c",
+                function="g",
+                line_start=1,
+                line_end=2,
+                severity="low",
+                confidence="confirmed",
+                status="confirmed",
+                title="leak at [bold]0x4141[/bold]",
+                description="A confirmed finding needs a non-trivial description"
+                " of at least fifty characters to satisfy the CHECK constraint.",
+                poc_code="print('poc')",
+                poc_result_json='{"stdout": "ok"}',
+                suggested_fix=None,
+                created_at=_iso(),
+            )
+        )
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(FindingsScreen(seeded_db))
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#findings-table", DataTable)
+        assert table.row_count == 2
+        # Render every cell of the Title column (index 5) and confirm the
+        # literal markup text survives — i.e. it was NOT parsed away.
+        rendered = ""
+        for row in range(table.row_count):
+            lines = table._render_cell(row, 5, Style(), width=60)
+            rendered += "".join(seg.text for line in lines for seg in line)
+        assert "[bold]0x4141[/bold]" in rendered

@@ -51,7 +51,8 @@ def _render(d: FindingDetail) -> str:
     if d.verdict:
         lines.append("")
         lines.append(f"## Validation: {d.verdict}")
-        lines.append(d.verdict_rationale or "")
+        if d.verdict_rationale:
+            lines.append(d.verdict_rationale)
     if d.call_chain:
         lines.append("")
         lines.append("## Trace")
@@ -77,7 +78,7 @@ class FindingDetailScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll():
-            yield Static("", id="finding-body")
+            yield Static("", id="finding-body", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:

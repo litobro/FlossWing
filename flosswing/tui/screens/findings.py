@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.screen import Screen
@@ -48,13 +49,18 @@ class FindingsScreen(Screen[None]):
         table = self.query_one("#findings-table", DataTable)
         table.add_columns("Severity", "Conf.", "Status", "Reach", "Class", "Title")
         for f in data.findings_list(self._run_id):
+            # Wrap untrusted, repo-derived strings (attack_class, title) in
+            # rich.text.Text so DataTable renders them literally rather than
+            # parsing embedded Rich markup like "[0x4141]" (CLAUDE.md: the
+            # target repo is untrusted input). Enum-like internal values
+            # (severity/confidence/status/reachable) stay plain.
             table.add_row(
                 f.severity,
                 f.confidence,
                 f.status,
                 f.reachable or "-",
-                f.attack_class,
-                f.title,
+                Text(f.attack_class),
+                Text(f.title),
                 key=f.id,
             )
 

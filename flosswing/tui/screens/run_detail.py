@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.screen import Screen
@@ -80,7 +81,15 @@ class RunDetailScreen(Screen[None]):
         cursor = table.cursor_row
         table.clear()
         for t in p.hunt_tasks:
-            table.add_row(t.attack_class, t.scope_hint, t.status, str(t.findings_count))
+            # Wrap untrusted, repo-derived strings (attack_class, scope_hint)
+            # in rich.text.Text so DataTable renders them literally instead of
+            # parsing embedded Rich markup (CLAUDE.md: repo is untrusted input).
+            table.add_row(
+                Text(t.attack_class),
+                Text(t.scope_hint),
+                t.status,
+                str(t.findings_count),
+            )
         if p.hunt_tasks and 0 <= cursor < len(p.hunt_tasks):
             table.move_cursor(row=cursor)
         if p.status != "running" and self._poll is not None:

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.screen import Screen
@@ -50,6 +51,9 @@ class SessionsScreen(Screen[None]):
                 note = f"refused: {r.refusal_text[:40]}"
             elif r.error_text:
                 note = f"error: {r.error_text[:40]}"
+            # The note carries untrusted refusal/error text; wrap it in
+            # rich.text.Text so DataTable renders it literally rather than
+            # parsing embedded Rich markup (CLAUDE.md: repo is untrusted).
             table.add_row(
                 r.stage,
                 r.model,
@@ -57,5 +61,5 @@ class SessionsScreen(Screen[None]):
                 str(r.output_tokens),
                 f"${r.cost_usd:.2f}",
                 r.outcome,
-                note,
+                Text(note),
             )
