@@ -245,9 +245,73 @@ def report(run_id: str, format_: str, output_dir: str | None) -> None:
 
 
 @main.command(name="eval")
-def eval_() -> None:
+@click.option("--from-run", "from_run", default=None,
+              help="Score an existing run instead of scanning (no API). Requires --corpus.")
+@click.option("--corpus", "corpus_name", default=None,
+              help="Corpus entry name (manifest stem).")
+@click.option("--manifest-dir", "manifest_dir", default=None,
+              type=click.Path(file_okay=False, dir_okay=True, resolve_path=True),
+              help="Ground-truth dir (default: packaged flosswing/eval/ground_truth).")
+@click.option("--corpus-root", "corpus_root", default="tests/corpus",
+              type=click.Path(file_okay=False, dir_okay=True, resolve_path=True),
+              help="Root for resolving a manifest's repo dir on the scan path.")
+@click.option("--include-uncertain", "include_uncertain", is_flag=True, default=False,
+              help="Also score findings with status 'uncertain'.")
+@click.option("--json", "json_out", default=None,
+              type=click.Path(dir_okay=False),
+              help="Write the scorecard JSON to this path.")
+@click.option("--min-recall", "min_recall", type=float, default=None,
+              help="Exit non-zero if aggregate recall < value.")
+@click.option("--min-precision", "min_precision", type=float, default=None,
+              help="Exit non-zero if aggregate precision < value.")
+def eval_(
+    from_run: str | None,
+    corpus_name: str | None,
+    manifest_dir: str | None,
+    corpus_root: str,
+    include_uncertain: bool,
+    json_out: str | None,
+    min_recall: float | None,
+    min_precision: float | None,
+) -> None:
     """Run the eval corpus and score against known-CVE ground truth."""
-    click.echo("not implemented")
+    import json as _json
+
+    from flosswing import errors as _errors
+    from flosswing.eval import corpus as _corpus
+    from flosswing.eval import runner as _runner
+
+    if from_run is not None and corpus_name is None:
+        click.echo("--from-run requires --corpus", err=True)
+        sys.exit(2)
+
+    mdir = Path(manifest_dir) if manifest_dir else _corpus.DEFAULT_MANIFEST_DIR
+    try:
+        result = _runner.run_evaluation(
+            manifest_dir=mdir,
+            corpus_root=Path(corpus_root),
+            from_run=from_run,
+            corpus_name=corpus_name,
+            include_uncertain=include_uncertain,
+        )
+    except (_errors.EvalConfigError, _errors.RunNotFoundError) as e:
+        click.echo(_errors.scrub(e.message), err=True)
+        sys.exit(2)
+
+    click.echo(_runner.render_scorecard(result))
+    if json_out is not None:
+        Path(json_out).write_text(
+            _json.dumps(result.model_dump(), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    agg = result.aggregate
+    if min_recall is not None and (agg.recall is None or agg.recall < min_recall):
+        sys.exit(1)
+    if min_precision is not None and (
+        agg.precision is None or agg.precision < min_precision
+    ):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
