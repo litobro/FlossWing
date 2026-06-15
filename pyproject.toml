@@ -101,8 +101,9 @@ ignore_missing_imports = true
 # TUI screens that are referenced lazily (inside action methods) and are
 # created in later tasks; ignore until all screen modules exist.
 module = [
-    "flosswing.tui.screens.run_detail",
     "flosswing.tui.screens.new_scan",
+    "flosswing.tui.screens.findings",
+    "flosswing.tui.screens.finding_detail",
 ]
 ignore_missing_imports = true
 

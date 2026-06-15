@@ -26,6 +26,7 @@ import pytest
 
 from flosswing.state import session as st_session
 from flosswing.state.models import (
+    AgentSession,
     Finding,
     HuntTask,
     Run,
@@ -97,6 +98,24 @@ def seeded_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
                 created_at=_iso(),
             )
         )
+        s.add(
+            AgentSession(
+                id="sess-1",
+                run_id=run_id,
+                stage="hunt",
+                model="claude-sonnet-4-6",
+                system_prompt_hash="x",
+                input_tokens=200,
+                output_tokens=80,
+                cost_usd=0.02,
+                duration_ms=1000,
+                outcome="completed",
+                task_id="task-1",
+                finding_id=None,
+                started_at=_iso(),
+                finished_at=_iso(),
+            )
+        )
     yield run_id
 
 
@@ -108,4 +127,35 @@ async def test_runs_screen_lists_run(seeded_db: str) -> None:
         from textual.widgets import DataTable
 
         table = app.screen.query_one("#runs-table", DataTable)
+        assert table.row_count == 1
+
+
+@pytest.mark.asyncio
+async def test_run_detail_shows_stage_strip_and_pushes(seeded_db: str) -> None:
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(RunDetailScreen(seeded_db))
+        await pilot.pause()
+        from textual.widgets import Static
+
+        strip = app.screen.query_one("#stage-strip", Static)
+        rendered = str(strip.content)
+        assert "Recon" in rendered and "Hunt" in rendered
+
+
+@pytest.mark.asyncio
+async def test_sessions_screen_lists_session(seeded_db: str) -> None:
+    from flosswing.tui.screens.sessions import SessionsScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(SessionsScreen(seeded_db))
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#sessions-table", DataTable)
         assert table.row_count == 1
