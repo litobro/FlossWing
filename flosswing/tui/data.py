@@ -55,11 +55,12 @@ class RunRow:
 def list_runs() -> list[RunRow]:
     """All runs, newest started_at first, with finding counts."""
     with st_session.session_scope() as s:
-        counts: dict[str, int] = dict(
-            s.execute(
+        counts: dict[str, int] = {
+            row[0]: row[1]
+            for row in s.execute(
                 select(Finding.run_id, func.count(Finding.id)).group_by(Finding.run_id)
-            ).all()  # type: ignore[arg-type]  # SA Row tuples satisfy Iterable[tuple[str, int]]
-        )
+            ).all()
+        }
         runs = (
             s.execute(select(Run).order_by(Run.started_at.desc()))
             .scalars()

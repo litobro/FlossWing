@@ -49,7 +49,13 @@ def isolated_db(
     yield tmp_path
 
 
-def _add_run(run_id: str, *, status: str = "completed", path: str = "/tmp/r") -> None:
+def _add_run(
+    run_id: str,
+    *,
+    status: str = "completed",
+    path: str = "/tmp/r",
+    started_at: str | None = None,
+) -> None:
     with st_session.session_scope() as s:
         s.add(
             Run(
@@ -59,7 +65,7 @@ def _add_run(run_id: str, *, status: str = "completed", path: str = "/tmp/r") ->
                 depth="standard",
                 budget_total=20,
                 budget_used=0,
-                started_at=_iso(),
+                started_at=started_at or _iso(),
                 finished_at=_iso() if status != "running" else None,
                 status=status,
                 config_json="{}",
@@ -109,8 +115,8 @@ def _add_finding(finding_id: str, run_id: str, *, status: str = "confirmed") -> 
 
 
 def test_list_runs_orders_newest_first_with_counts(isolated_db: Path) -> None:
-    _add_run("run-a", status="completed")
-    _add_run("run-b", status="running")
+    _add_run("run-a", status="completed", started_at="2026-06-15T00:00:01Z")
+    _add_run("run-b", status="running", started_at="2026-06-15T00:00:02Z")
     _add_finding("f1", "run-b")
     _add_finding("f2", "run-b")
 
@@ -126,3 +132,8 @@ def test_list_runs_orders_newest_first_with_counts(isolated_db: Path) -> None:
 
 def test_list_runs_empty(isolated_db: Path) -> None:
     assert data.list_runs() == []
+
+
+def test_short_id_truncates_to_last_8() -> None:
+    assert data._short_id("01JXABCDE12345678901ABCDE") == "901ABCDE"  # last 8 chars
+    assert data._short_id("short") == "short"
