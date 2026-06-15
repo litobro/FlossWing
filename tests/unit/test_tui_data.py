@@ -237,3 +237,45 @@ def test_run_progress_gapfill_detected_from_source(isolated_db: Path) -> None:
     assert p is not None
     stages = {st.name: st.state for st in p.stages}
     assert stages["Gapfill"] == "done"
+
+
+def test_findings_list_maps_rows(isolated_db: Path) -> None:
+    _add_run("run-f", status="completed")
+    _add_finding("f1", "run-f", status="confirmed")
+    rows = data.findings_list("run-f")
+    assert len(rows) == 1
+    assert rows[0].id == "f1"
+    assert rows[0].title == "Command injection in parse()"
+    assert rows[0].severity == "high"
+    assert rows[0].status == "confirmed"
+
+
+def test_findings_list_missing_run_is_empty(isolated_db: Path) -> None:
+    assert data.findings_list("nope") == []
+
+
+def test_finding_detail_includes_poc_result(isolated_db: Path) -> None:
+    _add_run("run-d", status="completed")
+    _add_finding("f1", "run-d", status="confirmed")
+    d = data.finding_detail("run-d", "f1")
+    assert d is not None
+    assert d.id == "f1"
+    assert d.poc_code == "print('poc')"
+    assert d.poc_result is not None and "pwned" in d.poc_result
+    assert d.suggested_fix is not None
+    assert "src/x.c" in d.location
+
+
+def test_finding_detail_missing_returns_none(isolated_db: Path) -> None:
+    _add_run("run-d2", status="completed")
+    assert data.finding_detail("run-d2", "ghost") is None
+
+
+def test_list_sessions(isolated_db: Path) -> None:
+    _add_run("run-s", status="completed")
+    _add_session("run-s", stage="recon", in_tok=100, out_tok=50, cost=0.01)
+    rows = data.list_sessions("run-s")
+    assert len(rows) == 1
+    assert rows[0].stage == "recon"
+    assert rows[0].input_tokens == 100
+    assert rows[0].outcome == "completed"

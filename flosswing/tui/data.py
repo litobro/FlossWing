@@ -28,10 +28,12 @@ in the TUI is run through flosswing.errors.scrub.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
 
+from flosswing.stages import report as report_stage
 from flosswing.state import session as st_session
 from flosswing.state.models import (
     AgentSession,
@@ -292,3 +294,155 @@ def run_progress(run_id: str) -> RunProgress | None:
             findings_by_status=by_status,
             hunt_tasks=hunt_tasks,
         )
+
+
+@dataclass(frozen=True)
+class FindingListRow:
+    id: str
+    title: str
+    attack_class: str
+    file: str
+    severity: str
+    confidence: str
+    status: str
+    reachable: str | None
+
+
+@dataclass(frozen=True)
+class FindingDetail:
+    id: str
+    title: str
+    attack_class: str
+    location: str
+    severity: str
+    confidence: str
+    status: str
+    description: str
+    poc_code: str | None
+    poc_result: str | None
+    suggested_fix: str | None
+    verdict: str | None
+    verdict_rationale: str | None
+    reachable: str | None
+    trace_rationale: str | None
+    call_chain: list[str]
+
+
+def _run_exists(run_id: str) -> bool:
+    with st_session.session_scope() as s:
+        return s.get(Run, run_id) is not None
+
+
+def findings_list(run_id: str) -> list[FindingListRow]:
+    """Findings for a run in report display order, or [] if the run is absent."""
+    if not _run_exists(run_id):
+        return []
+    report = report_stage._load(run_id, st_session.session_factory())
+    return [
+        FindingListRow(
+            id=f.id,
+            title=f.title,
+            attack_class=f.attack_class,
+            file=f.file,
+            severity=f.severity,
+            confidence=f.confidence,
+            status=f.status,
+            reachable=f.reachable,
+        )
+        for f in report.findings
+    ]
+
+
+def _format_poc_result(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    try:
+        return json.dumps(json.loads(raw), indent=2)
+    except (ValueError, TypeError):
+        return raw
+
+
+def _format_call_chain(chain: list[dict[str, object]]) -> list[str]:
+    hops: list[str] = []
+    for hop in chain:
+        sym = hop.get("symbol") or hop.get("function") or "?"
+        file = hop.get("file") or ""
+        line = hop.get("line")
+        loc = f"{file}:{line}" if line is not None else str(file)
+        hops.append(f"{sym}  ({loc})" if loc else str(sym))
+    return hops
+
+
+def finding_detail(run_id: str, finding_id: str) -> FindingDetail | None:
+    """Full detail for one finding, or None if run/finding absent."""
+    if not _run_exists(run_id):
+        return None
+    report = report_stage._load(run_id, st_session.session_factory())
+    match = next((f for f in report.findings if f.id == finding_id), None)
+    if match is None:
+        return None
+
+    # poc_result is not on ReportFinding; read it directly.
+    with st_session.session_scope() as s:
+        row = s.get(Finding, finding_id)
+        poc_result_raw = row.poc_result_json if row is not None else None
+
+    fn = f" ({match.function})" if match.function else ""
+    location = f"{match.file}:{match.line_start}-{match.line_end}{fn}"
+    return FindingDetail(
+        id=match.id,
+        title=match.title,
+        attack_class=match.attack_class,
+        location=location,
+        severity=match.severity,
+        confidence=match.confidence,
+        status=match.status,
+        description=match.description,
+        poc_code=match.poc_code,
+        poc_result=_format_poc_result(poc_result_raw),
+        suggested_fix=match.suggested_fix,
+        verdict=match.validation.verdict if match.validation else None,
+        verdict_rationale=match.validation.rationale if match.validation else None,
+        reachable=match.trace.reachable if match.trace else match.reachable,
+        trace_rationale=match.trace.rationale if match.trace else None,
+        call_chain=_format_call_chain(match.trace.call_chain) if match.trace else [],
+    )
+
+
+@dataclass(frozen=True)
+class SessionRow:
+    stage: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    outcome: str
+    refusal_text: str | None
+    error_text: str | None
+
+
+def list_sessions(run_id: str) -> list[SessionRow]:
+    """Agent sessions for a run, ordered by start time."""
+    with st_session.session_scope() as s:
+        rows = (
+            s.execute(
+                select(AgentSession)
+                .where(AgentSession.run_id == run_id)
+                .order_by(AgentSession.started_at.asc())
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            SessionRow(
+                stage=r.stage,
+                model=r.model,
+                input_tokens=r.input_tokens,
+                output_tokens=r.output_tokens,
+                cost_usd=r.cost_usd,
+                outcome=r.outcome,
+                refusal_text=r.refusal_text,
+                error_text=r.error_text,
+            )
+            for r in rows
+        ]
