@@ -18,6 +18,10 @@ env/
 # FlossWing runtime state (per ARCHITECTURE.md)
 .flosswing/
 
+# Secrets — never commit credentials
+.env
+.env.*
+
 # Editor / OS
 .vscode/
 .idea/

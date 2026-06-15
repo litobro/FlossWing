@@ -358,7 +358,7 @@ pyproject.toml
 CLAUDE.md                  # agent session bootstrap
 ARCHITECTURE.md            # this file
 README.md
-LICENSE                    # Apache-2.0 (see Licensing below)
+LICENSE                    # GPL-3.0-or-later (see Licensing below)
 ```
 
 ## State store
@@ -522,9 +522,9 @@ never the state DB, never logs. See `docs/specs/2026-05-25-v0.2-recon-plumbing-d
 
 ## Licensing
 
-Apache-2.0. Required because v1 ships PoC code generation; permissive license with
-explicit patent grant matches the dual-use nature of the tool. Do not change without
-operator approval.
+GPL-3.0-or-later. A strong copyleft license keeps the harness and any derivatives
+open, which fits a security-research tool whose value depends on auditability. Do not
+change without operator approval.
 
 ## When in doubt
 
