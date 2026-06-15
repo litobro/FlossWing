@@ -150,3 +150,17 @@ def test_eval_json_output(isolated_db: Path, tmp_path: Path) -> None:
     assert res.exit_code == 0
     assert out.exists()
     assert '"true_positives"' in out.read_text(encoding="utf-8")
+
+
+def test_eval_min_recall_out_of_range_is_usage_error(
+    isolated_db: Path, tmp_path: Path
+) -> None:
+    # A metric floor outside [0, 1] is a usage error (exit 2), not a silent
+    # always-fail. Click's FloatRange enforces the bound before the command runs.
+    run_id = str(ULID())
+    _seed(run_id)
+    res = CliRunner().invoke(main, [
+        "eval", "--from-run", run_id, "--corpus", "v02_smoke",
+        "--manifest-dir", str(_mdir(tmp_path)), "--min-recall", "2",
+    ])
+    assert res.exit_code == 2

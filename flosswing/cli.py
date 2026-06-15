@@ -260,10 +260,12 @@ def report(run_id: str, format_: str, output_dir: str | None) -> None:
 @click.option("--json", "json_out", default=None,
               type=click.Path(dir_okay=False),
               help="Write the scorecard JSON to this path.")
-@click.option("--min-recall", "min_recall", type=float, default=None,
-              help="Exit non-zero if aggregate recall < value.")
-@click.option("--min-precision", "min_precision", type=float, default=None,
-              help="Exit non-zero if aggregate precision < value.")
+@click.option("--min-recall", "min_recall", type=click.FloatRange(0.0, 1.0),
+              default=None,
+              help="Exit non-zero if aggregate recall < value (0.0-1.0).")
+@click.option("--min-precision", "min_precision", type=click.FloatRange(0.0, 1.0),
+              default=None,
+              help="Exit non-zero if aggregate precision < value (0.0-1.0).")
 def eval_(
     from_run: str | None,
     corpus_name: str | None,
