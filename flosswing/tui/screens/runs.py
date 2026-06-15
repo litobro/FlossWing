@@ -54,11 +54,10 @@ class RunsScreen(Screen[None]):
         cursor = table.cursor_row
         table.clear()
         for r in rows:
-            badge = "running" if r.status == "running" else r.status
             table.add_row(
                 r.short_id,
                 r.target_repo_path,
-                badge,
+                r.status,
                 str(r.findings_count),
                 r.started_at,
                 key=r.id,

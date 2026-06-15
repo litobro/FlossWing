@@ -43,7 +43,10 @@ class FlosswingTUI(App[None]):
         self._children.append(child)
 
     def live_children(self) -> list[ChildProcess]:
-        return [c for c in self._children if c.is_alive()]
+        """Return live children, pruning any that have exited."""
+        alive = [c for c in self._children if c.is_alive()]
+        self._children = alive
+        return alive
 
     def action_request_quit(self) -> None:
         """Quit, but guard against killing a live scan we launched."""
