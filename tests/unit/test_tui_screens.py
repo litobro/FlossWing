@@ -159,3 +159,35 @@ async def test_sessions_screen_lists_session(seeded_db: str) -> None:
 
         table = app.screen.query_one("#sessions-table", DataTable)
         assert table.row_count == 1
+
+
+@pytest.mark.asyncio
+async def test_findings_screen_lists_finding(seeded_db: str) -> None:
+    from flosswing.tui.screens.findings import FindingsScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(FindingsScreen(seeded_db))
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#findings-table", DataTable)
+        assert table.row_count == 1
+
+
+@pytest.mark.asyncio
+async def test_finding_detail_renders_poc(seeded_db: str) -> None:
+    from flosswing.tui.screens.finding_detail import FindingDetailScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(FindingDetailScreen(seeded_db, "find-1"))
+        await pilot.pause()
+        from textual.widgets import Static
+
+        body = app.screen.query_one("#finding-body", Static)
+        rendered = str(body.content)
+        assert "Command injection" in rendered
+        assert "pwned" in rendered  # poc result rendered

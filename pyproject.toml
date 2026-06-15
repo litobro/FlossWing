@@ -102,8 +102,6 @@ ignore_missing_imports = true
 # created in later tasks; ignore until all screen modules exist.
 module = [
     "flosswing.tui.screens.new_scan",
-    "flosswing.tui.screens.findings",
-    "flosswing.tui.screens.finding_detail",
 ]
 ignore_missing_imports = true
 
