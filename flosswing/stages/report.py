@@ -404,6 +404,16 @@ def _load(run_id: str, session_factory: SessionFactory) -> ReportV1:
     )
 
 
+def load_report(run_id: str, session_factory: SessionFactory) -> ReportV1:
+    """Public wrapper over :func:`_load`.
+
+    Stable entry point for callers outside the Report stage (e.g. the eval
+    runner) that need the operator-facing ReportV1 projection. Behaviour is
+    identical to ``_load``; ``_load`` is retained for internal callers.
+    """
+    return _load(run_id, session_factory)
+
+
 # Escape helpers — see module docstring for the strategy.
 
 

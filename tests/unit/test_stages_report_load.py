@@ -464,3 +464,16 @@ def test_load_rendered_at_is_iso_z(isolated_db: Path) -> None:
         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$"
     )
     assert pattern.match(report.rendered_at), report.rendered_at
+
+
+def test_load_report_public_wrapper(isolated_db: Path) -> None:
+    """The public load_report() returns the same projection as _load()."""
+    run_id = str(ULID())
+    _seed_run(run_id)
+    task_id = _seed_task(run_id)
+    fid = _seed_finding(run_id=run_id, task_id=task_id)
+
+    public = report_stage.load_report(run_id, st_session.session_factory())
+
+    assert public.run.id == run_id
+    assert [f.id for f in public.findings] == [fid]
