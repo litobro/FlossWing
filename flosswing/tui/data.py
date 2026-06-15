@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import func, select
 
@@ -329,6 +330,7 @@ class FindingDetail:
 
 
 def _run_exists(run_id: str) -> bool:
+    """Return True if a Run row for run_id exists."""
     with st_session.session_scope() as s:
         return s.get(Run, run_id) is not None
 
@@ -337,6 +339,7 @@ def findings_list(run_id: str) -> list[FindingListRow]:
     """Findings for a run in report display order, or [] if the run is absent."""
     if not _run_exists(run_id):
         return []
+    # TODO: swap to report.load_report() once the public wrapper lands on this branch.
     report = report_stage._load(run_id, st_session.session_factory())
     return [
         FindingListRow(
@@ -362,13 +365,13 @@ def _format_poc_result(raw: str | None) -> str | None:
         return raw
 
 
-def _format_call_chain(chain: list[dict[str, object]]) -> list[str]:
+def _format_call_chain(chain: list[dict[str, Any]]) -> list[str]:
     hops: list[str] = []
     for hop in chain:
         sym = hop.get("symbol") or hop.get("function") or "?"
-        file = hop.get("file") or ""
+        hop_file = hop.get("file") or ""
         line = hop.get("line")
-        loc = f"{file}:{line}" if line is not None else str(file)
+        loc = f"{hop_file}:{line}" if line is not None else str(hop_file)
         hops.append(f"{sym}  ({loc})" if loc else str(sym))
     return hops
 
@@ -377,6 +380,7 @@ def finding_detail(run_id: str, finding_id: str) -> FindingDetail | None:
     """Full detail for one finding, or None if run/finding absent."""
     if not _run_exists(run_id):
         return None
+    # TODO: swap to report.load_report() once the public wrapper lands on this branch.
     report = report_stage._load(run_id, st_session.session_factory())
     match = next((f for f in report.findings if f.id == finding_id), None)
     if match is None:

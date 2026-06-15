@@ -271,6 +271,10 @@ def test_finding_detail_missing_returns_none(isolated_db: Path) -> None:
     assert data.finding_detail("run-d2", "ghost") is None
 
 
+def test_finding_detail_missing_run_returns_none(isolated_db: Path) -> None:
+    assert data.finding_detail("ghost-run", "ghost-finding") is None
+
+
 def test_list_sessions(isolated_db: Path) -> None:
     _add_run("run-s", status="completed")
     _add_session("run-s", stage="recon", in_tok=100, out_tok=50, cost=0.01)
@@ -279,3 +283,7 @@ def test_list_sessions(isolated_db: Path) -> None:
     assert rows[0].stage == "recon"
     assert rows[0].input_tokens == 100
     assert rows[0].outcome == "completed"
+
+
+def test_list_sessions_missing_run_is_empty(isolated_db: Path) -> None:
+    assert data.list_sessions("nope") == []
