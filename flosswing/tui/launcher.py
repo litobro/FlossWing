@@ -36,7 +36,6 @@ _RUNS_DIR = Path.home() / ".flosswing" / "runs"
 def build_scan_argv(
     path: Path,
     *,
-    depth: str,
     formats: list[str],
     hunt_token_budget: int | None,
 ) -> list[str]:
@@ -47,8 +46,6 @@ def build_scan_argv(
         "flosswing.cli",
         "scan",
         str(path),
-        "--depth",
-        depth,
         "--format",
         ",".join(formats),
     ]
@@ -103,12 +100,11 @@ def _open_log(kind: str) -> Path:
 def spawn_scan(
     path: Path,
     *,
-    depth: str,
     formats: list[str],
     hunt_token_budget: int | None,
 ) -> ChildProcess:
     argv = build_scan_argv(
-        path, depth=depth, formats=formats, hunt_token_budget=hunt_token_budget
+        path, formats=formats, hunt_token_budget=hunt_token_budget
     )
     log_path = _open_log("scan")
     with open(log_path, "wb") as log:

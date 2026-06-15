@@ -30,13 +30,12 @@ from flosswing.tui import launcher
 def test_build_scan_argv_minimal() -> None:
     argv = launcher.build_scan_argv(
         Path("/tmp/repo"),
-        depth="standard",
         formats=["md", "json"],
         hunt_token_budget=None,
     )
     assert argv[:4] == [sys.executable, "-m", "flosswing.cli", "scan"]
     assert "/tmp/repo" in argv
-    assert "--depth" in argv and "standard" in argv
+    assert "--depth" not in argv
     assert "--format" in argv and "md,json" in argv
     assert "--hunt-token-budget" not in argv
 
@@ -44,13 +43,11 @@ def test_build_scan_argv_minimal() -> None:
 def test_build_scan_argv_with_budget() -> None:
     argv = launcher.build_scan_argv(
         Path("/tmp/repo"),
-        depth="deep",
         formats=["md"],
         hunt_token_budget=150000,
     )
     assert "--hunt-token-budget" in argv
     assert "150000" in argv
-    assert "deep" in argv
 
 
 def test_build_report_argv() -> None:
@@ -66,7 +63,7 @@ def test_spawn_scan_starts_process_and_tracks_it(
     fake.poll.return_value = None  # alive
     with mock.patch("flosswing.tui.launcher.subprocess.Popen", return_value=fake) as popen:
         proc = launcher.spawn_scan(
-            tmp_path, depth="standard", formats=["md"], hunt_token_budget=None
+            tmp_path, formats=["md"], hunt_token_budget=None
         )
     popen.assert_called_once()
     assert proc.is_alive() is True

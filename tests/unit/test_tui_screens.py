@@ -258,9 +258,8 @@ async def test_new_scan_modal_spawns_scan(
 
     spawned = {}
 
-    def fake_spawn(path, *, depth, formats, hunt_token_budget):  # type: ignore[no-untyped-def]
+    def fake_spawn(path, *, formats, hunt_token_budget):  # type: ignore[no-untyped-def]
         spawned["path"] = str(path)
-        spawned["depth"] = depth
         child = mock.MagicMock()
         child.is_alive.return_value = False
         child.kind = "scan"
@@ -282,6 +281,109 @@ async def test_new_scan_modal_spawns_scan(
         app.screen.action_submit()
         await pilot.pause()
     assert spawned["path"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_new_scan_rejects_empty_path(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest import mock
+
+    from flosswing.tui import launcher
+    from flosswing.tui.screens.new_scan import NewScanScreen
+
+    spawn = mock.MagicMock()
+    monkeypatch.setattr(launcher, "spawn_scan", spawn)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(NewScanScreen())
+        await pilot.pause()
+        from textual.widgets import Input, Static
+
+        app.screen.query_one("#scan-path", Input).value = "   "
+        app.screen.action_submit()
+        await pilot.pause()
+        err = app.screen.query_one("#scan-error", Static)
+        assert str(err.content) != ""
+    spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_scan_rejects_bad_format(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from unittest import mock
+
+    from flosswing.tui import launcher
+    from flosswing.tui.screens.new_scan import NewScanScreen
+
+    spawn = mock.MagicMock()
+    monkeypatch.setattr(launcher, "spawn_scan", spawn)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(NewScanScreen())
+        await pilot.pause()
+        from textual.widgets import Input, Static
+
+        app.screen.query_one("#scan-path", Input).value = str(tmp_path)
+        app.screen.query_one("#scan-formats", Input).value = "md,bogus"
+        app.screen.action_submit()
+        await pilot.pause()
+        err = app.screen.query_one("#scan-error", Static)
+        assert str(err.content) != ""
+    spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_scan_rejects_nonpositive_budget(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from unittest import mock
+
+    from flosswing.tui import launcher
+    from flosswing.tui.screens.new_scan import NewScanScreen
+
+    spawn = mock.MagicMock()
+    monkeypatch.setattr(launcher, "spawn_scan", spawn)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(NewScanScreen())
+        await pilot.pause()
+        from textual.widgets import Input, Static
+
+        app.screen.query_one("#scan-path", Input).value = str(tmp_path)
+        app.screen.query_one("#scan-budget", Input).value = "0"
+        app.screen.action_submit()
+        await pilot.pause()
+        err = app.screen.query_one("#scan-error", Static)
+        assert str(err.content) != ""
+    spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_quit_guard_kill_terminates(seeded_db: str) -> None:
+    from unittest import mock
+
+    from flosswing.tui.screens.new_scan import QuitGuard
+
+    child = mock.MagicMock()
+    child.is_alive.return_value = True
+    child.kind = "scan"
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(QuitGuard([child]))
+        await pilot.pause()
+        app.screen.action_kill()
+        await pilot.pause()
+    child.terminate.assert_called_once()
 
 
 @pytest.mark.asyncio

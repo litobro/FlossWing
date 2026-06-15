@@ -25,29 +25,26 @@ from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Static
+from textual.widgets import Button, Input, Label, Static
 
+from flosswing.tui import launcher
 from flosswing.tui.launcher import ChildProcess
 
-_DEPTHS: list[tuple[str, str]] = [("standard", "standard"), ("deep", "deep")]
 _FORMATS: list[str] = ["md", "json", "sarif"]
 
 
 class NewScanScreen(ModalScreen[None]):
     """Modal form for launching a new scan."""
 
-    BINDINGS: ClassVar[list[BindingType]] = [("escape", "app.pop_screen", "Cancel")]
+    BINDINGS: ClassVar[list[BindingType]] = [
+        ("enter", "submit", "Start"),
+        ("escape", "app.pop_screen", "Cancel"),
+    ]
 
     def compose(self) -> ComposeResult:
         with Vertical(id="new-scan-box"):
             yield Label("New scan")
             yield Input(value=str(Path.cwd()), placeholder="repo path", id="scan-path")
-            yield Select(
-                _DEPTHS,
-                value="standard",
-                id="scan-depth",
-                allow_blank=False,
-            )
             yield Input(value="md,json", placeholder="formats (comma sep)", id="scan-formats")
             yield Input(placeholder="hunt token budget (optional)", id="scan-budget")
             yield Static("", id="scan-error")
@@ -62,16 +59,16 @@ class NewScanScreen(ModalScreen[None]):
             self.app.pop_screen()
 
     def action_submit(self) -> None:
-        from flosswing.tui import launcher
-
         err = self.query_one("#scan-error", Static)
         path_str = self.query_one("#scan-path", Input).value.strip()
+        if not path_str:
+            err.update("repo path is required")
+            return
         path = Path(path_str)
         if not path.is_dir():
             err.update(f"not a directory: {path_str}")
             return
 
-        depth = str(self.query_one("#scan-depth", Select).value)
         formats = [
             f.strip()
             for f in self.query_one("#scan-formats", Input).value.split(",")
@@ -90,10 +87,13 @@ class NewScanScreen(ModalScreen[None]):
             except ValueError:
                 err.update("token budget must be an integer")
                 return
+            if budget <= 0:
+                err.update("token budget must be a positive integer")
+                return
 
         try:
             child = launcher.spawn_scan(
-                path, depth=depth, formats=formats, hunt_token_budget=budget
+                path, formats=formats, hunt_token_budget=budget
             )
         except Exception as e:  # surface, never crash the UI
             from flosswing import errors
@@ -103,7 +103,7 @@ class NewScanScreen(ModalScreen[None]):
 
         from flosswing.tui.app import FlosswingTUI
 
-        app = cast("FlosswingTUI", self.app)
+        app = cast(FlosswingTUI, self.app)
         app.track_child(child)
         app.pop_screen()
         self.notify("Scan started — watch the runs list for progress.")
