@@ -80,6 +80,26 @@ flosswing report <run_id>
 Re-renders the operator-facing output from the state DB. Useful
 after `--no-report`, or after a render failure during the scan.
 
+### Score against the eval corpus
+
+Measure detection quality against known-vulnerability ground truth.
+
+```bash
+# Re-score an existing run — no API call, fully deterministic.
+flosswing eval --from-run <run_id> --corpus v02_smoke
+
+# Run the full pipeline against every registered corpus repo, then score
+# (hits the API; operator-run, like the integration tests).
+flosswing eval
+
+# Gate on a recall floor — exits non-zero if aggregate recall < 0.8.
+flosswing eval --from-run <run_id> --corpus v02_smoke --min-recall 0.8
+```
+
+Ground-truth manifests live in `flosswing/eval/ground_truth/<name>.toml`.
+A finding counts as a true positive when it matches a ground-truth entry
+on file, attack class, and location (within a per-entry line tolerance).
+
 ### Common flags
 
 | Flag | Default | Description |

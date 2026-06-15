@@ -545,6 +545,17 @@ class RationaleEmptyError(RecordTraceError):
     retryable = True
 
 
+class EvalConfigError(FlosswingError):
+    """Raised when an eval ground-truth manifest is missing or invalid.
+
+    Operator-facing (CLI), not an agent tool error — no wire code in
+    docs/tool-contracts.md. The CLI maps it to exit 2.
+    """
+
+    code = "eval_config_invalid"
+    retryable = False
+
+
 # -----------------------------------------------------------------------------
 # Credential scrubber
 # -----------------------------------------------------------------------------

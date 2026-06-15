@@ -1,0 +1,12 @@
+name = "v08_dedupe_smoke"
+repo = "v08_dedupe_smoke"
+description = "One shell-injection root cause with two sinks in one function."
+
+[[vuln]]
+id = "cmdi-run-ops"
+file = "app.py"
+line_start = 10
+line_end = 14
+attack_class = "command_injection"
+tolerance = 5
+notes = "run_ops() has two shell-command sinks (lines 10, 14); dedupe should yield a single primary finding."

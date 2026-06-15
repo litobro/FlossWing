@@ -404,6 +404,22 @@ def _load(run_id: str, session_factory: SessionFactory) -> ReportV1:
     )
 
 
+def load_report(run_id: str, session_factory: SessionFactory) -> ReportV1:
+    """Public entry point for the operator-facing ReportV1 projection.
+
+    Stable wrapper over :func:`_load` for callers outside the Report stage
+    (e.g. the eval runner).
+
+    ``session_factory`` is accepted for signature symmetry with the other
+    stage entry points (see :func:`render` and :func:`_load`), but is
+    currently **ignored**: the loader reads from the process-wide state DB
+    selected by ``FLOSSWING_DB_URL`` via ``session_scope()``. Tests target an
+    alternate DB by setting that env var and resetting the cached engine, not
+    by passing a factory here.
+    """
+    return _load(run_id, session_factory)
+
+
 # Escape helpers — see module docstring for the strategy.
 
 
