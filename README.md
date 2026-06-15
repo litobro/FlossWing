@@ -137,4 +137,5 @@ require local-only grammar fixups.
 
 ## License
 
-(No license file yet. Until one is added, all rights reserved.)
+GNU General Public License v3.0 or later (GPL-3.0-or-later). See
+[LICENSE](LICENSE) for the full text.

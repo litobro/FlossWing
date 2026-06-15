@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flosswing"
-version = "0.1.0"
+version = "1.0.1"
 description = "Local-CLI vulnerability research harness."
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "FlossWing contributors" }]
 dependencies = [
     # Min pinned to 0.2.87: that's the version on which the SDK
