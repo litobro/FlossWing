@@ -165,12 +165,22 @@ Functions (names indicative; all read-only):
   model, input/output tokens, cost, duration, outcome, and (scrubbed)
   refusal/error text.
 
-All free-text fields that originate from the target repo or agent output
-(titles, descriptions, rationales, refusal text, scope hints) are passed
-through `flosswing.errors.scrub()` **in `data.py`** before leaving the
-layer, so no screen can accidentally render an unscrubbed credential-like
-string. (Defensive: the DB should already be clean, but the threat model
-treats agent/repo text as untrusted.)
+Free-text fields that originate from the target repo or agent output
+(titles, descriptions, rationales, refusal text, scope hints) are
+displayed **as-is** — they are already credential-scrubbed *upstream* at
+DB-write time (the agent runtime scrubs `refusal_text`/`error_text`
+before persisting), so `data.py` does not re-scrub. This matches
+`flosswing.stages.report`'s deliberate decision not to re-scrub finding
+text (re-scrubbing would corrupt the operator's view). `errors.scrub()`
+is applied only to *error/exception* strings the TUI itself surfaces
+(e.g. a failed report-render notification), mirroring `cli.py report`.
+
+A separate concern from credential scrubbing is **markup safety**: repo/
+agent text is untrusted and must not be interpreted as Rich console
+markup. The TUI renders such text literally — `DataTable` cells carrying
+untrusted values are wrapped in `rich.text.Text`, the finding-detail body
+uses `Static(markup=False)`, and error toasts/inputs that interpolate
+untrusted-or-operator text pass `markup=False`.
 
 ### Stage-progress derivation note
 
