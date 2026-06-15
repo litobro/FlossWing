@@ -1,0 +1,11 @@
+name = "v02_smoke"
+repo = "v02_smoke"
+description = "Tiny Python CLI with one shell-command injection sink."
+
+[[vuln]]
+id = "cmdi-greet"
+file = "src/example/cli.py"
+line_start = 16
+line_end = 16
+attack_class = "command_injection"
+notes = "greet() builds a shell command from user input — command injection."
