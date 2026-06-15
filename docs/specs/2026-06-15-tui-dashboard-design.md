@@ -183,8 +183,11 @@ written), the TUI shows a neutral state rather than guessing.
 ## Scan launching (`launcher.py` + `new_scan.py`)
 
 **Mechanism.** Subprocess, not in-process. The TUI spawns
-`flosswing scan <path> [--depth …] [--format …] [--hunt-token-budget …]`
-as a child process using the same Python entry point. The TUI does
+`flosswing scan <path> [--format …] [--hunt-token-budget …]`
+as a child process using the same Python entry point. (Implementation
+note: the `flosswing scan` CLI exposes no `--depth` flag — only
+`--format` and the per-stage `--*-token-budget` overrides — so the
+form offers only options the CLI actually accepts.) The TUI does
 **not** import or call `orchestrator.run_scan` in its own event loop —
 this keeps the agent/SDK/sandbox import graph and any pipeline
 crash/refusal out of the UI process.
@@ -204,8 +207,7 @@ screen shows a "starting…" state.
 - repo path (text input; defaults to `cwd`; validated to be an existing
   directory before the scan is allowed — reuses the same
   `exists/dir_okay` constraints `flosswing scan` enforces).
-- depth (choice: `standard` / `deep`; default `standard`).
-- output format (multi-select among `md` / `json` / `sarif`; default
+- output format (comma-separated among `md` / `json` / `sarif`; default
   `md,json`).
 - token-budget override (optional integer; maps to
   `--hunt-token-budget`, the most impactful single budget knob).
@@ -310,7 +312,7 @@ read; no incremental diffing state is kept in the screen.
 ## Open questions
 
 None blocking. Defaults chosen above for: refresh interval (2s, fixed),
-new-scan option set (path + depth + format + hunt-token-budget),
+new-scan option set (path + format + hunt-token-budget),
 quit-guard (detach/kill/cancel), and report Report-stage display
 ("rendered"/"n/a" best-effort).
 
