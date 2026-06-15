@@ -22,7 +22,7 @@ from typing import ClassVar
 
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.binding import BindingType
+from textual.binding import Binding, BindingType
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header
 
@@ -31,7 +31,9 @@ from flosswing.tui import data
 
 class FindingsScreen(Screen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
-        ("enter", "open_finding", "Open"),
+        # priority=True: DataTable also binds enter (select_cursor); the screen
+        # must win so that enter opens the finding detail rather than DataTable eating it.
+        Binding("enter", "open_finding", "Open", priority=True),
         ("escape", "app.pop_screen", "Back"),
     ]
 

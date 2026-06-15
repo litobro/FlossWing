@@ -21,20 +21,28 @@ from __future__ import annotations
 from typing import ClassVar, cast
 
 from textual.app import ComposeResult
-from textual.binding import BindingType
+from textual.binding import Binding, BindingType
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import DataTable, Footer, Header, Static
 
+from flosswing import errors
 from flosswing.tui import data
 
 
 class RunsScreen(Screen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
-        ("enter", "open_run", "Open"),
+        # priority=True: DataTable also binds enter (select_cursor); the screen
+        # must win so that enter opens the run detail rather than DataTable eating it.
+        Binding("enter", "open_run", "Open", priority=True),
         ("n", "new_scan", "New scan"),
         ("r", "render_report", "Re-render report"),
         ("q", "request_quit", "Quit"),
     ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._poll: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -46,11 +54,20 @@ class RunsScreen(Screen[None]):
         table = self.query_one("#runs-table", DataTable)
         table.add_columns("Run", "Repo", "Status", "Findings", "Started")
         self.refresh_rows()
-        self.set_interval(2.0, self.refresh_rows)
+        self._poll = self.set_interval(2.0, self.refresh_rows)
 
     def refresh_rows(self) -> None:
         table = self.query_one("#runs-table", DataTable)
-        rows = data.list_runs()
+        try:
+            rows = data.list_runs()
+        except Exception as e:  # DB unreadable — show guidance, stop poll, never crash
+            empty = self.query_one("#runs-empty", Static)
+            empty.update(f"Cannot read state.db: {errors.scrub(str(e))}")
+            table.clear()
+            if self._poll is not None:
+                self._poll.stop()
+                self._poll = None
+            return
         cursor = table.cursor_row
         table.clear()
         for r in rows:
@@ -106,7 +123,7 @@ class RunsScreen(Screen[None]):
         except Exception as e:  # surface error in the UI, never crash the dashboard
             from flosswing import errors
 
-            self.notify(f"report failed: {errors.scrub(str(e))}", severity="error")
+            self.notify(f"report failed: {errors.scrub(str(e))}", severity="error", markup=False)
 
     def action_request_quit(self) -> None:
         from flosswing.tui.app import FlosswingTUI

@@ -47,7 +47,7 @@ class NewScanScreen(ModalScreen[None]):
             yield Input(value=str(Path.cwd()), placeholder="repo path", id="scan-path")
             yield Input(value="md,json", placeholder="formats (comma sep)", id="scan-formats")
             yield Input(placeholder="hunt token budget (optional)", id="scan-budget")
-            yield Static("", id="scan-error")
+            yield Static("", id="scan-error", markup=False)
             with Horizontal():
                 yield Button("Start", variant="primary", id="scan-start")
                 yield Button("Cancel", id="scan-cancel")

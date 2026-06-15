@@ -387,6 +387,52 @@ async def test_quit_guard_kill_terminates(seeded_db: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_enter_on_run_opens_detail(seeded_db: str) -> None:
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, RunDetailScreen)
+
+
+@pytest.mark.asyncio
+async def test_enter_on_finding_opens_detail(seeded_db: str) -> None:
+    from flosswing.tui.screens.finding_detail import FindingDetailScreen
+    from flosswing.tui.screens.findings import FindingsScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(FindingsScreen(seeded_db))
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, FindingDetailScreen)
+
+
+@pytest.mark.asyncio
+async def test_db_error_shows_guidance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RunsScreen must not crash when list_runs raises; #runs-empty shows guidance."""
+    from flosswing.tui import data as tui_data
+
+    def boom() -> list[object]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tui_data, "list_runs", boom)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import Static
+
+        empty = app.screen.query_one("#runs-empty", Static)
+        assert "Cannot read" in str(empty.content)
+
+
+@pytest.mark.asyncio
 async def test_quit_guard_detach_exits(seeded_db: str) -> None:
     from unittest import mock
 
