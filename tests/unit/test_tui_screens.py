@@ -245,3 +245,62 @@ async def test_findings_table_renders_markup_literally(seeded_db: str) -> None:
             lines = table._render_cell(row, 5, Style(), width=60)
             rendered += "".join(seg.text for line in lines for seg in line)
         assert "[bold]0x4141[/bold]" in rendered
+
+
+@pytest.mark.asyncio
+async def test_new_scan_modal_spawns_scan(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from unittest import mock
+
+    from flosswing.tui import launcher
+    from flosswing.tui.screens.new_scan import NewScanScreen
+
+    spawned = {}
+
+    def fake_spawn(path, *, depth, formats, hunt_token_budget):  # type: ignore[no-untyped-def]
+        spawned["path"] = str(path)
+        spawned["depth"] = depth
+        child = mock.MagicMock()
+        child.is_alive.return_value = False
+        child.kind = "scan"
+        return child
+
+    monkeypatch.setattr(launcher, "spawn_scan", fake_spawn)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = NewScanScreen()
+        app.push_screen(screen)
+        await pilot.pause()
+        # Set the path input to an existing dir and submit.
+        from textual.widgets import Input
+
+        path_input = app.screen.query_one("#scan-path", Input)
+        path_input.value = str(tmp_path)
+        app.screen.action_submit()
+        await pilot.pause()
+    assert spawned["path"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_quit_guard_detach_exits(seeded_db: str) -> None:
+    from unittest import mock
+
+    from flosswing.tui.screens.new_scan import QuitGuard
+
+    child = mock.MagicMock()
+    child.is_alive.return_value = True
+    child.kind = "scan"
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        guard = QuitGuard([child])
+        app.push_screen(guard)
+        await pilot.pause()
+        app.screen.action_detach()
+        await pilot.pause()
+    # Detach must NOT terminate the child.
+    child.terminate.assert_not_called()
