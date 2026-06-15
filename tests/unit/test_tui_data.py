@@ -26,8 +26,10 @@ import pytest
 
 from flosswing.state import session as st_session
 from flosswing.state.models import (
+    AgentSession,
     Finding,
     HuntTask,
+    ReconArtifact,
     Run,
 )
 from flosswing.tui import data
@@ -137,3 +139,101 @@ def test_list_runs_empty(isolated_db: Path) -> None:
 def test_short_id_truncates_to_last_8() -> None:
     assert data._short_id("01JXABCDE12345678901ABCDE") == "901ABCDE"  # last 8 chars
     assert data._short_id("short") == "short"
+
+
+def _add_recon(run_id: str) -> None:
+    with st_session.session_scope() as s:
+        s.add(
+            ReconArtifact(
+                id=f"recon-{run_id}",
+                run_id=run_id,
+                languages_json="[]",
+                build_commands_json="[]",
+                trust_boundaries_json="[]",
+                subsystems_json="[]",
+                notes="",
+                recorded_at=_iso(),
+            )
+        )
+
+
+def _add_hunt_task(
+    task_id: str, run_id: str, *, status: str, source: str = "recon"
+) -> None:
+    with st_session.session_scope() as s:
+        s.add(
+            HuntTask(
+                id=task_id,
+                run_id=run_id,
+                attack_class="path_traversal",
+                scope_hint="src/y.c",
+                source=source,
+                status=status,
+                created_at=_iso(),
+                findings_count=0,
+            )
+        )
+
+
+def _add_session(run_id: str, *, stage: str, in_tok: int, out_tok: int, cost: float) -> None:
+    with st_session.session_scope() as s:
+        s.add(
+            AgentSession(
+                id=f"sess-{run_id}-{stage}-{in_tok}",
+                run_id=run_id,
+                stage=stage,
+                task_id=None,
+                finding_id=None,
+                model="claude-sonnet-4-6",
+                system_prompt_hash="x",
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                cost_usd=cost,
+                duration_ms=1000,
+                outcome="completed",
+                started_at=_iso(),
+                finished_at=_iso(),
+            )
+        )
+
+
+def test_run_progress_none_for_missing_run(isolated_db: Path) -> None:
+    _add_run("exists")
+    assert data.run_progress("ghost") is None
+
+
+def test_run_progress_stage_derivation_and_totals(isolated_db: Path) -> None:
+    _add_run("run-x", status="running")
+    _add_recon("run-x")
+    _add_hunt_task("t1", "run-x", status="completed")
+    _add_hunt_task("t2", "run-x", status="running")
+    _add_hunt_task("t3", "run-x", status="pending")
+    _add_finding("f1", "run-x", status="confirmed")
+    _add_session("run-x", stage="recon", in_tok=100, out_tok=50, cost=0.01)
+    _add_session("run-x", stage="hunt", in_tok=200, out_tok=80, cost=0.02)
+
+    p = data.run_progress("run-x")
+    assert p is not None
+    assert p.run_id == "run-x"
+    assert p.hunt_total == 4  # 3 added here + 1 from _add_finding's task
+    # done = not in (pending, running): t1 + _add_finding's "completed" task
+    assert p.hunt_done == 2
+    assert p.tokens_used == 100 + 50 + 200 + 80
+    assert round(p.cost_usd, 4) == 0.03
+    assert p.findings_total == 1
+    assert p.findings_by_status["confirmed"] == 1
+
+    stages = {st.name: st.state for st in p.stages}
+    assert stages["Recon"] == "done"
+    assert stages["Hunt"] == "active"  # some done, some not, run running
+    # No validations rows -> Validate pending while run is running
+    assert stages["Validate"] == "pending"
+
+
+def test_run_progress_gapfill_detected_from_source(isolated_db: Path) -> None:
+    _add_run("run-g", status="completed")
+    _add_hunt_task("g1", "run-g", status="completed", source="gapfill")
+    p = data.run_progress("run-g")
+    assert p is not None
+    stages = {st.name: st.state for st in p.stages}
+    assert stages["Gapfill"] == "done"
