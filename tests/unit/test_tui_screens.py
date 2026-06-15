@@ -131,7 +131,7 @@ async def test_runs_screen_lists_run(seeded_db: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_detail_shows_stage_strip_and_pushes(seeded_db: str) -> None:
+async def test_run_detail_shows_stage_strip(seeded_db: str) -> None:
     from flosswing.tui.screens.run_detail import RunDetailScreen
 
     app = FlosswingTUI()

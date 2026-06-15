@@ -29,6 +29,8 @@ from textual.widgets import DataTable, Footer, Header, Static
 from flosswing.tui import data
 
 _GLYPH = {"done": "✓", "active": "▶", "pending": "…", "n/a": "·"}
+# Must stay in sync with the state values emitted by data._derive_stages;
+# a new state there needs a new entry here (falls back to "?" otherwise).
 
 
 class RunDetailScreen(Screen[None]):
@@ -41,7 +43,7 @@ class RunDetailScreen(Screen[None]):
     def __init__(self, run_id: str) -> None:
         super().__init__()
         self._run_id = run_id
-        self._poll: Timer
+        self._poll: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -66,7 +68,7 @@ class RunDetailScreen(Screen[None]):
             return
         self.sub_title = f"{p.short_id}  {p.target_repo_path}  [{p.status}]"
         strip.update(
-            "  ".join(f"{_GLYPH[st.state]} {st.name}" for st in p.stages)
+            "  ".join(f"{_GLYPH.get(st.state, '?')} {st.name}" for st in p.stages)
         )
         meta.update(
             f"Hunt {p.hunt_done}/{p.hunt_total}   "
@@ -81,8 +83,9 @@ class RunDetailScreen(Screen[None]):
             table.add_row(t.attack_class, t.scope_hint, t.status, str(t.findings_count))
         if p.hunt_tasks and 0 <= cursor < len(p.hunt_tasks):
             table.move_cursor(row=cursor)
-        if p.status != "running":
+        if p.status != "running" and self._poll is not None:
             self._poll.stop()
+            self._poll = None
 
     def action_findings(self) -> None:
         from flosswing.tui.screens.findings import FindingsScreen
