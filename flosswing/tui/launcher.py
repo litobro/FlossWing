@@ -28,6 +28,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 _RUNS_DIR = Path.home() / ".flosswing" / "runs"
 
@@ -61,13 +62,13 @@ def build_report_argv(run_id: str) -> list[str]:
     return [sys.executable, "-m", "flosswing.cli", "report", run_id]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ChildProcess:
     """A spawned child plus its captured-output log path."""
 
     popen: subprocess.Popen[bytes]
     log_path: Path
-    kind: str  # "scan" | "report"
+    kind: Literal["scan", "report"]
 
     def is_alive(self) -> bool:
         return self.popen.poll() is None
@@ -110,14 +111,16 @@ def spawn_scan(
         path, depth=depth, formats=formats, hunt_token_budget=hunt_token_budget
     )
     log_path = _open_log("scan")
-    log = open(log_path, "wb")  # noqa: SIM115 — handle owned by the child's lifetime
-    popen = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+    with open(log_path, "wb") as log:
+        popen = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+    # parent's fd closed here; the child already holds its own copy
     return ChildProcess(popen=popen, log_path=log_path, kind="scan")
 
 
 def spawn_report(run_id: str) -> ChildProcess:
     argv = build_report_argv(run_id)
     log_path = _open_log("report")
-    log = open(log_path, "wb")  # noqa: SIM115
-    popen = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+    with open(log_path, "wb") as log:
+        popen = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
+    # parent's fd closed here; the child already holds its own copy
     return ChildProcess(popen=popen, log_path=log_path, kind="report")

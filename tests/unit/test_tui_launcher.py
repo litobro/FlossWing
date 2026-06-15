@@ -72,6 +72,22 @@ def test_spawn_scan_starts_process_and_tracks_it(
     assert proc.is_alive() is True
     # log path is under the flosswing runs dir
     assert proc.log_path.name == "tui-scan.log"
+    # the log file handle was wired to the child's stdout, stderr merged in
+    assert popen.call_args.kwargs["stdout"] is not None
+    assert popen.call_args.kwargs["stderr"] is launcher.subprocess.STDOUT
+
+
+def test_spawn_report_starts_process_and_tracks_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher, "_RUNS_DIR", tmp_path)
+    fake = mock.MagicMock()
+    fake.poll.return_value = None  # alive
+    with mock.patch("flosswing.tui.launcher.subprocess.Popen", return_value=fake) as popen:
+        proc = launcher.spawn_report("run-42")
+    popen.assert_called_once()
+    assert proc.is_alive() is True
+    assert proc.log_path.name == "tui-report.log"
 
 
 def test_proc_is_alive_false_after_exit() -> None:
@@ -93,3 +109,13 @@ def test_terminate_escalates_to_kill() -> None:
     proc.terminate(grace_seconds=5)
     fake.terminate.assert_called_once()
     fake.kill.assert_called_once()
+    assert fake.wait.call_count == 2  # post-SIGTERM wait + post-SIGKILL wait
+
+
+def test_terminate_early_returns_when_already_dead() -> None:
+    fake = mock.MagicMock()
+    fake.poll.return_value = 0  # already exited
+    proc = launcher.ChildProcess(popen=fake, log_path=Path("/tmp/x.log"), kind="scan")
+    proc.terminate()
+    fake.terminate.assert_not_called()
+    fake.kill.assert_not_called()
