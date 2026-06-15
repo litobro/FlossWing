@@ -31,6 +31,7 @@ dependencies = [
     "tree-sitter-typescript==0.23.2",
     "tree-sitter-java==0.23.5",
     "python-ulid",
+    "textual",
 ]
 
 [project.optional-dependencies]
@@ -88,6 +89,12 @@ module = [
     "tree_sitter",
     "tree_sitter.*",
 ]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Textual ships py.typed but rich internals occasionally lack precise stubs;
+# only silence missing-imports, keep our own code strictly typed.
+module = ["rich.*"]
 ignore_missing_imports = true
 
 # -----------------------------------------------------------------------------
