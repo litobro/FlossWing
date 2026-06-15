@@ -97,6 +97,15 @@ ignore_missing_imports = true
 module = ["rich.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# TUI screens that are referenced lazily (inside action methods) and are
+# created in later tasks; ignore until all screen modules exist.
+module = [
+    "flosswing.tui.screens.run_detail",
+    "flosswing.tui.screens.new_scan",
+]
+ignore_missing_imports = true
+
 # -----------------------------------------------------------------------------
 # Pytest
 # -----------------------------------------------------------------------------

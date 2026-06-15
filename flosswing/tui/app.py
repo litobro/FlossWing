@@ -18,20 +18,44 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from textual.app import App
+
+from flosswing.tui.launcher import ChildProcess
+
+
+class FlosswingTUI(App[None]):
+    """Read-only dashboard over state.db plus a scan/report launcher."""
+
+    TITLE = "FlossWing"
+    SUB_TITLE = "vulnerability research dashboard"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._children: list[ChildProcess] = []
+
+    def on_mount(self) -> None:
+        from flosswing.tui.screens.runs import RunsScreen
+
+        self.push_screen(RunsScreen())
+
+    def track_child(self, child: ChildProcess) -> None:
+        """Register a spawned child so the quit guard can manage it."""
+        self._children.append(child)
+
+    def live_children(self) -> list[ChildProcess]:
+        return [c for c in self._children if c.is_alive()]
+
+    def action_request_quit(self) -> None:
+        """Quit, but guard against killing a live scan we launched."""
+        live = [c for c in self.live_children() if c.kind == "scan"]
+        if not live:
+            self.exit()
+            return
+        from flosswing.tui.screens.new_scan import QuitGuard
+
+        self.push_screen(QuitGuard(live))
 
 
 def run() -> None:
-    """Launch the dashboard. Fleshed out in a later task."""
-    from textual.app import App, ComposeResult
-    from textual.binding import BindingType
-    from textual.widgets import Footer, Static
-
-    class _Placeholder(App[None]):
-        BINDINGS: ClassVar[list[BindingType]] = [("q", "quit", "Quit")]
-
-        def compose(self) -> ComposeResult:
-            yield Static("FlossWing TUI — under construction")
-            yield Footer()
-
-    _Placeholder().run()
+    """Launch the dashboard (called by `flosswing tui`)."""
+    FlosswingTUI().run()
