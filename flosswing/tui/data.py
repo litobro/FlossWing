@@ -143,7 +143,6 @@ def _derive_stages(
     n_validations: int,
     n_clusters: int,
     n_traces: int,
-    findings_total: int,
 ) -> list[StageState]:
     """Infer per-stage state purely from which rows exist.
 
@@ -151,16 +150,6 @@ def _derive_stages(
     derived from its own evidence. A stage with no evidence is 'pending'
     while the run is still running and 'n/a' once it has stopped.
     """
-    hunt_finished = hunt_total > 0 and hunt_done == hunt_total
-    hunt_active = hunt_total > 0 and not hunt_finished
-    if hunt_finished:
-        hunt_state = "done"
-    elif hunt_active:
-        hunt_state = "active"
-    elif run_running:
-        hunt_state = "pending"
-    else:
-        hunt_state = "n/a"
     return [
         _stage("Recon", recon_done, active_if_running=not recon_done, run_running=run_running),
         _stage(
@@ -169,7 +158,12 @@ def _derive_stages(
             active_if_running=recon_done and not index_done,
             run_running=run_running,
         ),
-        StageState("Hunt", hunt_state),
+        _stage(
+            "Hunt",
+            hunt_total > 0 and hunt_done == hunt_total,
+            active_if_running=hunt_total > 0 and hunt_done < hunt_total,
+            run_running=run_running,
+        ),
         _stage("Validate", n_validations > 0, active_if_running=False, run_running=run_running),
         _stage("Gapfill", gapfill_done, active_if_running=False, run_running=run_running),
         _stage("Dedupe", n_clusters > 0, active_if_running=False, run_running=run_running),
@@ -280,7 +274,6 @@ def run_progress(run_id: str) -> RunProgress | None:
             n_validations=n_validations,
             n_clusters=n_clusters,
             n_traces=n_traces,
-            findings_total=findings_total,
         )
 
         return RunProgress(
