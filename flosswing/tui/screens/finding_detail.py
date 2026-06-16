@@ -103,13 +103,18 @@ class FindingDetailScreen(Screen[None]):
         super().__init__()
         self._run_id = run_id
         self._finding_id = finding_id
-        d = data.finding_detail(self._run_id, self._finding_id)
-        self._md: str = _render(d) if d is not None else "_finding not found_"
+        try:
+            d = data.finding_detail(run_id, finding_id)
+            self._md: str = _render(d) if d is not None else "_finding not found_"
+        except Exception as e:  # DB unreadable — show guidance, never crash the push
+            from flosswing import errors
+
+            self._md = f"Cannot load finding: {errors.scrub(str(e))}"
 
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll():
-            yield Markdown(self._md, id="finding-body")
+            yield Markdown(self._md, id="finding-body", open_links=False)
         yield Footer()
 
     def on_mount(self) -> None:

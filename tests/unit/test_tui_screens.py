@@ -187,11 +187,12 @@ async def test_finding_detail_renders_poc(seeded_db: str) -> None:
         await pilot.pause()
         app.push_screen(FindingDetailScreen(seeded_db, "find-1"))
         await pilot.pause()
-        # Assert against the stored markdown source (stable, set in __init__).
-        assert "Command injection" in app.screen._md
-        assert "pwned" in app.screen._md  # poc result rendered
-        # Assert the widget is a Markdown instance (not a Static).
-        assert isinstance(app.screen.query_one("#finding-body"), Markdown)
+        # Assert against the widget's public markdown source.
+        md = app.screen.query_one("#finding-body", Markdown)
+        assert "Command injection" in md.source
+        assert "pwned" in md.source  # poc result rendered
+        # Links must be inert: untrusted content cannot trigger webbrowser.open.
+        assert md._open_links is False
 
 
 def test_render_produces_valid_markdown() -> None:
@@ -248,6 +249,25 @@ def test_fence_guard_prevents_breakout() -> None:
     # Longer run: 5 backticks in content → 6-backtick fence.
     long_run = _fence("`````code`````")
     assert long_run.startswith("``````"), f"expected 6-backtick fence, got: {long_run!r}"
+
+    # Structural breakout attempt: content embeds a closing fence on its own line
+    # followed by an injected heading. The whole payload must stay inside the
+    # outer fence — the injected heading must NOT escape into a real heading.
+    content = "```\ncode\n```\n# INJECTED"
+    out2 = _fence(content)
+    lines = out2.splitlines()
+    open_fence = lines[0]
+    close_fence = lines[-1]
+    # Outer fence is at least 4 backticks (longer than the embedded 3).
+    assert open_fence.startswith("````")
+    assert set(open_fence) == {"`"} and len(open_fence) >= 4
+    assert close_fence == open_fence
+    # The injected heading sits strictly between the outer fences (still fenced).
+    body = lines[1:-1]
+    assert "# INJECTED" in body
+    # And there is no real heading: the only top-level lines outside the fence
+    # are the fence lines themselves.
+    assert out2.startswith(open_fence) and out2.endswith(close_fence)
 
 
 @pytest.mark.asyncio
