@@ -348,7 +348,9 @@ CREATE TABLE findings (
         FOREIGN KEY (hunt_task_id) REFERENCES hunt_tasks(id) ON DELETE CASCADE,
     CONSTRAINT fk_findings_primary_findings
         FOREIGN KEY (primary_finding_id) REFERENCES findings(id) ON DELETE SET NULL,
-    -- dedupe_cluster_id FK declared on the cluster side via the link table; see below.
+    CONSTRAINT fk_findings_dedupe_cluster_id_dedupe_clusters
+        FOREIGN KEY (dedupe_cluster_id) REFERENCES dedupe_clusters(id)
+        ON DELETE SET NULL,
     CONSTRAINT ck_findings_severity
         CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
     CONSTRAINT ck_findings_confidence
