@@ -316,5 +316,15 @@ def eval_(
         sys.exit(1)
 
 
+@main.command(name="tui")
+def tui() -> None:
+    """Launch the interactive terminal dashboard for browsing runs and findings."""
+    # Lazy import: keep textual + the TUI import graph off the startup path
+    # of scan/report/eval (mirrors the lazy state import in `report`).
+    from flosswing.tui import app as tui_app
+
+    tui_app.run()
+
+
 if __name__ == "__main__":
     main()
