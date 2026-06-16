@@ -82,43 +82,59 @@ matches `schema.sql`, which is exactly what the sync check validates.
 
 ### Part A1 — idempotent `ck` naming convention (`flosswing/state/db.py`)
 
-Replace the static `ck` template with a custom token function that yields the
-bare suffix even when handed a full `ck_<table>_<suffix>` name, so prepending
-`ck_<table>_` never doubles:
+Override the built-in `%(constraint_name)s` token with a callable that yields
+the bare suffix even when handed a full `ck_<table>_<suffix>` name, so the
+`ck_%(table_name)s_%(constraint_name)s` template never doubles. The callable
+must be placed under the **`"constraint_name"`** key (not a new custom token):
+SQLAlchemy's `ConventionDict.__getitem__` checks the convention dict before its
+built-in `_key_constraint_name`, and — critically — the convention is only
+applied to *named* constraints when the literal `constraint_name` token is
+present in the convention. (A separate custom token such as `ck_suffix` does
+**not** work: named constraints are skipped entirely.)
 
 ```python
 from collections.abc import Callable
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.sql.schema import CheckConstraint, Table
 
 
-def _ck_suffix(constraint: CheckConstraint, table: Table) -> str:
-    """Idempotent CHECK-constraint suffix.
+def _ck_constraint_name(constraint: CheckConstraint, table: Table) -> str:
+    """Idempotent %(constraint_name)s token for the ck convention.
 
-    A plain-string constraint name is fed through this convention as the
-    ``%(ck_suffix)s`` token. If the author already wrote the full
-    ``ck_<table>_<suffix>`` name, strip the redundant ``ck_<table>_`` prefix so
-    the template does not double it; a bare suffix passes through unchanged.
+    Strips a redundant ``ck_<table>_`` prefix if the author wrote the full
+    name (migration-001 style); a bare suffix passes through unchanged. Raises
+    if the constraint is unnamed (the project requires every constraint named).
     """
-    raw = constraint.name or ""
+    name = constraint.name
+    if not isinstance(name, str):
+        raise InvalidRequestError(
+            "Naming convention with %(constraint_name)s requires the "
+            "CHECK constraint to be explicitly named."
+        )
     prefix = f"ck_{table.name}_"
-    return raw[len(prefix):] if raw.startswith(prefix) else raw
+    # Defensive: mirror SQLAlchemy's _key_constraint_name side-effect.
+    constraint.name = None
+    return name[len(prefix):] if name.startswith(prefix) else name
 
 
 NAMING_CONVENTION: dict[str, str | Callable[[CheckConstraint, Table], str]] = {
     "ix": "ix_%(table_name)s_%(column_0_name)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
-    "ck": "ck_%(table_name)s_%(ck_suffix)s",
-    "ck_suffix": _ck_suffix,
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "constraint_name": _ck_constraint_name,
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
 ```
 
-Empirically validated: signature `(constraint, table)` is what SQLAlchemy calls
-for a custom convention token; a fresh `001` upgrade under this convention
-produced all 46 clean names with zero doubling. Only the `ck` entry changes;
-`ix`/`uq`/`fk`/`pk` are untouched. No model-level checks exist, so autogenerate
-behavior is unaffected.
+Empirically validated: a fresh `001` upgrade under this convention produced all
+46 clean names with zero doubling. The `constraint_name` token is referenced
+**only** by the `ck` template here (`ix`/`uq`/`fk`/`pk` use other tokens), so
+the callable affects CHECK constraints only — confirmed live that fk/ix/uq/pk
+names are unaffected. No model-level checks exist, so autogenerate is
+unaffected. The `MetaData(...)` call needs `# type: ignore[arg-type]` because
+the SQLAlchemy stubs type `naming_convention` as `Mapping[str, str]` while
+callable tokens are supported at runtime.
 
 ### Part A2 — `docs/schema.sql` FK
 
