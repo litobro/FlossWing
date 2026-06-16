@@ -25,6 +25,29 @@ NOT"](ARCHITECTURE.md#what-flosswing-is-not) for the full list.
 - Not a cross-repo system in v1. Reachability traces stop at the
   repo boundary.
 
+## Responsible use & disclosure
+
+FlossWing looks for real, potentially exploitable vulnerabilities in real
+software. Use it accordingly:
+
+- **Only scan code you're authorized to scan.** Your own projects, code you
+  have explicit permission to test, or public open-source software you're
+  researching in good faith. Pointing offensive tooling at third-party systems
+  you don't have the right to test may be illegal where you live.
+- **Disclose responsibly.** If FlossWing surfaces a real vulnerability in
+  software you don't maintain, report it privately to the maintainers and give
+  them reasonable time to fix it before sharing any detail publicly. Don't
+  publish, sell, or weaponize unfixed findings. FlossWing deliberately never
+  contacts anyone on your behalf — what you do with a finding is your decision
+  and your responsibility.
+- **Findings are candidates, not verdicts.** Every finding comes out of an
+  LLM-agent pipeline. The Validate stage re-checks each one and, where possible,
+  runs a proof-of-concept in the sandbox — which cuts false positives
+  substantially but does **not** eliminate them. Treat every finding as a lead
+  to verify by hand, not a confirmed CVE, and expect some misses and some noise.
+  You can measure detection quality on a known-vulnerability corpus with
+  `flosswing eval` (see below).
+
 ## Requirements
 
 - **Python 3.11+**
@@ -36,6 +59,14 @@ NOT"](ARCHITECTURE.md#what-flosswing-is-not) for the full list.
     OR
   - A valid `az login` session.
 - The target repo cloned locally.
+
+> **Cost:** a scan runs a multi-stage Claude (Opus-class) agent pipeline, so it
+> consumes meaningful API credit — this is BYO-key and you pay for the tokens.
+> As a rough data point, one scan of a mid-sized real-world Python web app
+> (tens of thousands of LOC) cost about **$14** in API spend. Cost scales with
+> repo size and how many findings get investigated. Every run records its
+> actual token/cost usage (shown in the report and the `flosswing tui`
+> dashboard), and the per-stage `--*-token-budget` flags cap spend.
 
 ## Install
 
