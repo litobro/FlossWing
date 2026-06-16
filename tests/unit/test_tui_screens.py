@@ -178,6 +178,8 @@ async def test_findings_screen_lists_finding(seeded_db: str) -> None:
 
 @pytest.mark.asyncio
 async def test_finding_detail_renders_poc(seeded_db: str) -> None:
+    from textual.widgets import Markdown
+
     from flosswing.tui.screens.finding_detail import FindingDetailScreen
 
     app = FlosswingTUI()
@@ -185,12 +187,67 @@ async def test_finding_detail_renders_poc(seeded_db: str) -> None:
         await pilot.pause()
         app.push_screen(FindingDetailScreen(seeded_db, "find-1"))
         await pilot.pause()
-        from textual.widgets import Static
+        # Assert against the stored markdown source (stable, set in __init__).
+        assert "Command injection" in app.screen._md
+        assert "pwned" in app.screen._md  # poc result rendered
+        # Assert the widget is a Markdown instance (not a Static).
+        assert isinstance(app.screen.query_one("#finding-body"), Markdown)
 
-        body = app.screen.query_one("#finding-body", Static)
-        rendered = str(body.content)
-        assert "Command injection" in rendered
-        assert "pwned" in rendered  # poc result rendered
+
+def test_render_produces_valid_markdown() -> None:
+    """_render builds well-structured Markdown from a FindingDetail."""
+    from flosswing.tui.data import FindingDetail
+    from flosswing.tui.screens.finding_detail import _render
+
+    d = FindingDetail(
+        id="test-1",
+        title="SQL injection in login()",
+        attack_class="sql_injection",
+        location="src/auth.py:42-55 (login)",
+        severity="critical",
+        confidence="confirmed",
+        status="confirmed",
+        description="Unsanitised user input is interpolated into a raw SQL query.",
+        poc_code="payload = \"' OR 1=1 --\"",
+        poc_result='{"stdout": "admin logged in"}',
+        suggested_fix="Use parameterised queries.",
+        verdict="exploitable",
+        verdict_rationale="Confirmed via PoC execution.",
+        reachable="yes",
+        trace_rationale="Taint flows from HTTP param to cursor.execute.",
+        call_chain=["handle_login (src/views.py:10)", "login (src/auth.py:42)"],
+    )
+    md = _render(d)
+    # Starts with H1 title.
+    assert md.startswith("# SQL injection in login()")
+    # Description prose is present.
+    assert "Unsanitised user input" in md
+    # PoC code appears inside a fenced block (backticks on a line before it).
+    assert "```" in md
+    assert "' OR 1=1 --" in md
+    # PoC result is present.
+    assert "admin logged in" in md
+    # Call chain items are present.
+    assert "handle_login" in md
+
+
+def test_fence_guard_prevents_breakout() -> None:
+    """_fence uses a longer fence when content contains backtick runs."""
+    from flosswing.tui.screens.finding_detail import _fence
+
+    # Content with triple backticks — must produce at least 4-backtick fence.
+    out = _fence("```")
+    assert out.startswith("````"), f"expected 4-backtick opening fence, got: {out!r}"
+    # The literal triple-backtick content must appear inside.
+    assert "```" in out
+
+    # Content with no backticks — standard 3-backtick fence is fine.
+    plain = _fence("hello world")
+    assert plain.startswith("```")
+
+    # Longer run: 5 backticks in content → 6-backtick fence.
+    long_run = _fence("`````code`````")
+    assert long_run.startswith("``````"), f"expected 6-backtick fence, got: {long_run!r}"
 
 
 @pytest.mark.asyncio

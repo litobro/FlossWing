@@ -24,47 +24,76 @@ from textual.app import ComposeResult
 from textual.binding import BindingType
 from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer, Header, Markdown
 
 from flosswing.tui import data
 from flosswing.tui.data import FindingDetail
 
 
+def _fence(content: str, lang: str = "") -> str:
+    """Wrap content in a code fence long enough that the content cannot
+    break out (CommonMark: a fence is closed only by a line of >= as many
+    backticks). Uses one more backtick than the longest backtick run inside."""
+    longest = 0
+    run = 0
+    for ch in content:
+        if ch == "`":
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 0
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}{lang}\n{content}\n{fence}"
+
+
 def _render(d: FindingDetail) -> str:
-    lines: list[str] = []
-    lines.append(f"# {d.title}")
-    lines.append(f"{d.attack_class}  ·  {d.severity}/{d.confidence}  ·  {d.status}")
-    lines.append(f"location: {d.location}")
+    sections: list[str] = []
+
+    # Title
+    sections.append(f"# {d.title}")
+
+    # Metadata
+    meta = f"**{d.attack_class}** · {d.severity}/{d.confidence} · {d.status}"
+    location_line = f"*location:* {d.location}"
     if d.reachable:
-        lines.append(f"reachability: {d.reachable}")
-    lines.append("")
-    lines.append("## Description")
-    lines.append(d.description or "(none)")
+        meta_block = f"{meta}\n\n{location_line}\n\n*reachability:* {d.reachable}"
+    else:
+        meta_block = f"{meta}\n\n{location_line}"
+    sections.append(meta_block)
+
+    # Description
+    desc_text = d.description if d.description else "_(none)_"
+    sections.append(f"## Description\n\n{desc_text}")
+
+    # PoC
     if d.poc_code:
-        lines.append("")
-        lines.append("## PoC")
-        lines.append(d.poc_code)
+        sections.append(f"## PoC\n\n{_fence(d.poc_code)}")
+
+    # PoC result
     if d.poc_result:
-        lines.append("")
-        lines.append("## PoC result")
-        lines.append(d.poc_result)
+        sections.append(f"## PoC result\n\n{_fence(d.poc_result)}")
+
+    # Validation
     if d.verdict:
-        lines.append("")
-        lines.append(f"## Validation: {d.verdict}")
+        validation_section = f"## Validation: {d.verdict}"
         if d.verdict_rationale:
-            lines.append(d.verdict_rationale)
+            validation_section += f"\n\n{d.verdict_rationale}"
+        sections.append(validation_section)
+
+    # Trace
     if d.call_chain:
-        lines.append("")
-        lines.append("## Trace")
+        trace_section = "## Trace"
         if d.trace_rationale:
-            lines.append(d.trace_rationale)
-        for i, hop in enumerate(d.call_chain):
-            lines.append(f"  {i}. {hop}")
+            trace_section += f"\n\n{d.trace_rationale}"
+        numbered = "\n".join(f"{i + 1}. {hop}" for i, hop in enumerate(d.call_chain))
+        trace_section += f"\n\n{numbered}"
+        sections.append(trace_section)
+
+    # Suggested fix
     if d.suggested_fix:
-        lines.append("")
-        lines.append("## Suggested fix")
-        lines.append(d.suggested_fix)
-    return "\n".join(lines)
+        sections.append(f"## Suggested fix\n\n{d.suggested_fix}")
+
+    return "\n\n".join(sections)
 
 
 class FindingDetailScreen(Screen[None]):
@@ -74,15 +103,14 @@ class FindingDetailScreen(Screen[None]):
         super().__init__()
         self._run_id = run_id
         self._finding_id = finding_id
+        d = data.finding_detail(self._run_id, self._finding_id)
+        self._md: str = _render(d) if d is not None else "_finding not found_"
 
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll():
-            yield Static("", id="finding-body", markup=False)
+            yield Markdown(self._md, id="finding-body")
         yield Footer()
 
     def on_mount(self) -> None:
         self.sub_title = "finding"
-        d = data.finding_detail(self._run_id, self._finding_id)
-        body = self.query_one("#finding-body", Static)
-        body.update(_render(d) if d is not None else "finding not found")
