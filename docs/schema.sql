@@ -7,9 +7,11 @@
 -- `flosswing/state/migrations/versions/`. This file MUST stay in sync with the
 -- result of `alembic upgrade head` against an empty database.
 --
--- Sync check: a CI test runs `alembic upgrade head` against a temp SQLite DB,
--- dumps the schema via `.schema`, and compares against this file (normalized).
--- Drift fails the build.
+-- Sync check: `tests/unit/test_schema_sync.py` runs `alembic upgrade head`
+-- against a temp SQLite DB, builds a second temp DB by executing this file, and
+-- compares them *structurally* via PRAGMA introspection (columns incl. position,
+-- foreign keys, indexes, and CHECK/UNIQUE/FK/PK constraint names) — not a text
+-- dump, so formatting and clause ordering are ignored. Drift fails the build.
 --
 -- --- Alembic conventions for FlossWing ---------------------------------------
 --
@@ -348,7 +350,9 @@ CREATE TABLE findings (
         FOREIGN KEY (hunt_task_id) REFERENCES hunt_tasks(id) ON DELETE CASCADE,
     CONSTRAINT fk_findings_primary_findings
         FOREIGN KEY (primary_finding_id) REFERENCES findings(id) ON DELETE SET NULL,
-    -- dedupe_cluster_id FK declared on the cluster side via the link table; see below.
+    CONSTRAINT fk_findings_dedupe_cluster_id_dedupe_clusters
+        FOREIGN KEY (dedupe_cluster_id) REFERENCES dedupe_clusters(id)
+        ON DELETE SET NULL,
     CONSTRAINT ck_findings_severity
         CHECK (severity IN ('critical', 'high', 'medium', 'low', 'info')),
     CONSTRAINT ck_findings_confidence

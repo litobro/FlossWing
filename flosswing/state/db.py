@@ -23,20 +23,64 @@ schema-drift CI check compares against the names in that header.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import MetaData, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.sql.schema import CheckConstraint, Table
 
-NAMING_CONVENTION: dict[str, str] = {
+
+def _ck_constraint_name(constraint: CheckConstraint, table: Table) -> str:
+    """Idempotent ``%(constraint_name)s`` token for the ``ck`` naming convention.
+
+    SQLAlchemy's ``ConventionDict.__getitem__`` checks the naming-convention dict
+    before falling back to its built-in ``_key_constraint_name`` method, so
+    placing a callable under the ``"constraint_name"`` key overrides the default
+    token resolution for CHECK constraints.
+
+    If the author already wrote the full ``ck_<table>_<suffix>`` name (the style
+    used in migration 001), this strips the redundant ``ck_<table>_`` prefix
+    before it is re-applied by the ``ck_%(table_name)s_%(constraint_name)s``
+    template, preventing the ``ck_<table>_ck_<table>_<suffix>`` doubling.  A
+    bare suffix (e.g. ``"nonneg"``) is returned unchanged so the template
+    produces ``ck_<table>_nonneg`` as normal.  Both authoring styles are
+    therefore idempotent.
+    """
+    # Defensive scope guard: this callable is registered under the global
+    # "constraint_name" token but only the ``ck`` template uses it today. If a
+    # future template wires %(constraint_name)s for another constraint type,
+    # don't strip a ``ck_`` prefix or mutate it — return its name unchanged.
+    if not isinstance(constraint, CheckConstraint):
+        name = constraint.name
+        return name if isinstance(name, str) else ""
+
+    name = constraint.name
+    if not isinstance(name, str):
+        raise InvalidRequestError(
+            "Naming convention with %(constraint_name)s requires the "
+            "CHECK constraint to be explicitly named."
+        )
+    prefix = f"ck_{table.name}_"
+    # Defensive: mirror SQLAlchemy's _key_constraint_name side-effect. In practice
+    # _constraint_name overwrites name with conv(...) unconditionally, so this isn't
+    # load-bearing today, but omitting it would diverge from the built-in's contract
+    # and could break under a future SQLAlchemy refactor.
+    constraint.name = None
+    return name[len(prefix):] if name.startswith(prefix) else name
+
+
+NAMING_CONVENTION: dict[str, str | Callable[[CheckConstraint, Table], str]] = {
     "ix": "ix_%(table_name)s_%(column_0_name)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
     "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "constraint_name": _ck_constraint_name,
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
 
-metadata: MetaData = MetaData(naming_convention=NAMING_CONVENTION)
+metadata: MetaData = MetaData(naming_convention=NAMING_CONVENTION)  # type: ignore[arg-type]  # SQLAlchemy stubs type naming_convention as Mapping[str, str]; custom token callables are supported at runtime
 
 
 # SQLite ships with FK enforcement off by default; we require it on for every
