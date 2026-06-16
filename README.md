@@ -80,6 +80,35 @@ flosswing report <run_id>
 Re-renders the operator-facing output from the state DB. Useful
 after `--no-report`, or after a render failure during the scan.
 
+### Browse runs and findings (interactive dashboard)
+
+```bash
+flosswing tui
+```
+
+Launches a full-screen terminal dashboard (built on Textual) for
+browsing past runs, watching a scan's progress live, and drilling into
+findings — a friendlier alternative to reading `state.db` with
+`sqlite3`. It is **read-only** over the state DB; the only thing it
+mutates is launching `flosswing scan` / `flosswing report` as child
+processes, exactly as if you ran them yourself. No daemon, no server,
+no network.
+
+Navigation is keyboard-first:
+
+- A **runs list** (newest first) — `enter` opens a run, `n` launches a
+  new scan, `r` re-renders a report, `q` quits.
+- **Run detail**: pipeline stage progress, token/cost usage, and the
+  Hunt task table, refreshed live while a scan is running. `f` opens
+  the findings list, `s` the agent sessions, `esc` goes back.
+- **Finding detail**: the write-up rendered as Markdown, with the PoC
+  code and result, validation verdict, reachability trace, and
+  suggested fix.
+
+Needs a real terminal (TTY). The `textual` dependency installs with
+the package. Repo-derived text is rendered literally, so untrusted
+finding content can't inject terminal markup or open links.
+
 ### Score against the eval corpus
 
 Measure detection quality against known-vulnerability ground truth.
