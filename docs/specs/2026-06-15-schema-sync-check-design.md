@@ -10,103 +10,121 @@ Adding the check surfaced that the two **do not currently agree**, in two
 substantive ways (beyond cosmetic whitespace/comments):
 
 1. **46 CHECK constraints have doubled names** in the migration-built schema.
-   Migration `001_initial` declares each check with its full name
-   (`sa.CheckConstraint(..., name="ck_runs_depth")`), and the `ck` naming
-   convention (`flosswing/state/db.py:34`, `ck_%(table_name)s_%(constraint_name)s`)
-   wraps it again → `ck_runs_ck_runs_depth`. `docs/schema.sql` documents the
-   intended clean names (`ck_runs_depth`). The model declares no checks (they
-   live only in migrations).
+   Migration `001_initial` declares each check with a plain full-name string
+   (`sa.CheckConstraint(..., name="ck_runs_depth")`). Because the metadata has a
+   `ck` naming convention (`flosswing/state/db.py`,
+   `ck_%(table_name)s_%(constraint_name)s`), SQLAlchemy treats the plain string
+   as the `constraint_name` token and wraps it again → `ck_runs_ck_runs_depth`.
+   `docs/schema.sql` documents the intended clean names (`ck_runs_depth`). The
+   model declares no checks (they live only in migrations).
 2. **One foreign key exists only in the migration.** `001` creates
    `fk_findings_dedupe_cluster_id_dedupe_clusters`; `schema.sql` omits it
    (a misleading comment at line 351 stands in its place).
 
 Operator decisions (2026-06-15):
-- **CHECK names** → the doc is right; fix the live schema to the clean names.
+- **CHECK names** → fix the convention so the schema is clean, going forward and
+  on fresh builds; do not rebuild live DBs.
 - **FK** → the migration is right; keep the FK, document it in `schema.sql`.
 - **Comparator** → structural (PRAGMA-based), not text comparison.
 
+### Why no rename migration
+
+Renaming the 46 checks on existing DBs is impractical and risky: SQLite cannot
+rename a constraint, and Alembic batch `drop_constraint(name, type_="check")`
+fails because SQLite does not expose named CHECK constraints to reflection
+(verified: `ValueError: No such constraint: 'ck_runs_ck_runs_depth'`). It would
+require full table rebuilds of all 13 affected tables on live data.
+
+Instead, the doubling is fixed at its source — the naming convention. Making the
+`ck` convention **idempotent** (strip a redundant `ck_<table>_` prefix if the
+provided name already carries it) causes a fresh `alembic upgrade head` to
+produce the clean names directly. Verified: with the idempotent convention a
+fresh `001` build yields `doubled=0, total_ck=46` (e.g. `ck_runs_depth`). This
+needs **no new migration** and touches **no existing data**. Already-migrated
+DBs keep their legacy doubled names (the constraints enforce identically); the
+schema the migrations build *going forward* (fresh installs, CI) is clean and
+matches `schema.sql`, which is exactly what the sync check validates.
+
 ## Success criteria
 
-- A new migration renames all 46 doubled CHECK constraints to their clean
-  `ck_<table>_<suffix>` names. A fresh `alembic upgrade head` and an upgrade of
-  an existing `001`-only DB both converge to the clean names.
+- The `ck` naming convention is idempotent: a fresh `alembic upgrade head`
+  produces clean `ck_<table>_<suffix>` names (no doubling) for all 46 checks,
+  and any future constraint named with either a bare suffix or a full name
+  comes out clean.
 - `docs/schema.sql` declares the `fk_findings_dedupe_cluster_id_dedupe_clusters`
-  foreign key (replacing the line-351 comment).
-- `tests/unit/test_schema_sync.py` builds the schema two ways (migrations vs
-  `schema.sql`) and asserts structural equality; it passes after the fixes and
-  fails with a readable diff on future drift.
+  foreign key (replacing the line-351 comment) and still executes as a script.
+- `tests/unit/test_schema_sync.py` builds the schema two ways (fresh migrations
+  vs `schema.sql`), asserts structural equality, and fails with a readable diff
+  on future drift.
 - CI alembic round-trip (`upgrade head` → `downgrade base` → `upgrade head`)
   stays green; `ruff`, `mypy --strict flosswing`, `pytest tests/unit` pass.
-- Batch rebuild preserves existing row data.
+- No new migration; no change to existing databases.
 
 ## Scope
 
 ### In scope
 
-- New migration `002_normalize_check_constraint_names.py` (rename only).
+- `flosswing/state/db.py`: make the `ck` naming convention idempotent.
 - `docs/schema.sql`: add the one FK declaration.
 - `tests/unit/test_schema_sync.py`: the structural sync check.
 
 ### Out of scope (not now)
 
-- Moving CHECK constraints into the model metadata (`db.py`/`models.py`). The
-  project deliberately keeps checks in migrations; doing so would change
-  autogenerate behavior. The sync check (DB-vs-doc) is the guard instead.
+- Any new migration / renaming constraints in existing DBs. Legacy DBs keep
+  their doubled names; this is accepted (constraints function identically).
 - Editing migration `001` (immutable applied history).
-- Any column/type/index change. This is a name-only + doc-only reconciliation.
-- Fixing the cosmetic `DEFAULT x NOT NULL` vs `NOT NULL DEFAULT x` ordering —
-  the structural comparator ignores it.
+- Moving CHECK constraints into the model metadata. The project keeps checks in
+  migrations; the sync check (DB-vs-doc) is the guard.
+- Any column/type/index change, and the cosmetic `DEFAULT x NOT NULL` vs
+  `NOT NULL DEFAULT x` ordering (the structural comparator ignores it).
 
 ## Architecture
 
-### Part A1 — migration `002` (constraint rename)
+### Part A1 — idempotent `ck` naming convention (`flosswing/state/db.py`)
 
-`flosswing/state/migrations/versions/002_normalize_check_constraint_names.py`,
-`down_revision = "001_initial"`. For each of the 13 affected tables, a
-`with op.batch_alter_table(<table>) as batch:` block drops each doubled-name
-check and recreates it with the clean name and the **identical expression**
-copied from `001`. `render_as_batch` is already enforced in `env.py`.
+Replace the static `ck` template with a custom token function that yields the
+bare suffix even when handed a full `ck_<table>_<suffix>` name, so prepending
+`ck_<table>_` never doubles:
 
-Naming caveat to verify during implementation: `create_check_constraint`'s name
-argument is fed through the same `ck` naming convention that doubled the names
-in `001`. The implementer MUST confirm (via the round-trip + sync test) which
-form yields the clean `ck_<table>_<suffix>` name — passing the bare suffix
-(e.g. `"depth"`) if the convention is applied, or the full clean name if it is
-not — and use whichever produces the correct final name. The sync test fails
-loudly if the resulting name is wrong, so this is self-checking.
+```python
+from collections.abc import Callable
+from sqlalchemy.sql.schema import CheckConstraint, Table
 
-`downgrade()` reverses each rename (clean → doubled) so the alembic round-trip
-passes.
 
-The full authoritative mapping (doubled → clean), grouped by table:
+def _ck_suffix(constraint: CheckConstraint, table: Table) -> str:
+    """Idempotent CHECK-constraint suffix.
 
-```
-agent_sessions:  stage, outcome, tokens, cost
-call_sites:      line
-dedupe_clusters: member_count
-entry_points:    kind, attacker_input, line
-finding_links:   relationship, distinct
-findings:        severity, confidence, status, dedupe_role, reachable, lines,
-                 poc_result_valid, confirmed_evidence
-hunt_tasks:      priority, source, status, findings_count
-recon_artifacts: languages_valid, builds_valid, trust_valid, subsystems_valid
-runs:            depth, status, budget, config_json_valid
-sandbox_runs:    language, network, backend, files_valid, args_valid, env_valid,
-                 build_result_valid, run_result_valid
-symbols:         kind, lines
-traces:          reachable, call_chain_valid, reachable_has_entry_point
-validations:     verdict, evidence_valid
+    A plain-string constraint name is fed through this convention as the
+    ``%(ck_suffix)s`` token. If the author already wrote the full
+    ``ck_<table>_<suffix>`` name, strip the redundant ``ck_<table>_`` prefix so
+    the template does not double it; a bare suffix passes through unchanged.
+    """
+    raw = constraint.name or ""
+    prefix = f"ck_{table.name}_"
+    return raw[len(prefix):] if raw.startswith(prefix) else raw
+
+
+NAMING_CONVENTION: dict[str, str | Callable[[CheckConstraint, Table], str]] = {
+    "ix": "ix_%(table_name)s_%(column_0_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(ck_suffix)s",
+    "ck_suffix": _ck_suffix,
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
 ```
 
-(doubled = `ck_<table>_ck_<table>_<suffix>`, clean = `ck_<table>_<suffix>`).
-Each clean name and its CHECK expression are taken verbatim from `001`; the
-expression text is unchanged — only the constraint name changes.
+Empirically validated: signature `(constraint, table)` is what SQLAlchemy calls
+for a custom convention token; a fresh `001` upgrade under this convention
+produced all 46 clean names with zero doubling. Only the `ck` entry changes;
+`ix`/`uq`/`fk`/`pk` are untouched. No model-level checks exist, so autogenerate
+behavior is unaffected.
 
 ### Part A2 — `docs/schema.sql` FK
 
 Replace the comment at `docs/schema.sql:351`
 (`-- dedupe_cluster_id FK declared on the cluster side ...`) with the real
-constraint, matching the migration:
+constraint, matching the migration, in the `findings` table's constraint list:
 
 ```sql
     CONSTRAINT fk_findings_dedupe_cluster_id_dedupe_clusters
@@ -114,47 +132,47 @@ constraint, matching the migration:
         ON DELETE SET NULL,
 ```
 
-placed in the `findings` table's constraint list consistent with surrounding
-style. No migration change — the FK already exists in `001` and live DBs.
+No migration change — the FK already exists in `001` and live DBs.
 
 ### Part B — `tests/unit/test_schema_sync.py` (structural comparator)
 
 Builds two temp SQLite DBs and compares them structurally:
 
-- **DB-A (migrations):** a temp file DB; run `alembic upgrade head`
-  (programmatically, or rely on the state-session auto-upgrade by pointing
-  `FLOSSWING_DB_URL` at a fresh temp file and initialising the engine).
-- **DB-B (doc):** a temp file DB; execute `docs/schema.sql` via
-  `sqlite3.connect(...).executescript(schema_sql)`.
+- **DB-A (migrations):** a temp file DB; point `FLOSSWING_DB_URL` at it, reset
+  `flosswing.state.session._cached_engine`/`_cached_session_factory`, and call
+  `engine()` (auto-runs `alembic upgrade head`).
+- **DB-B (doc):** a temp file DB; `sqlite3.connect(...).executescript(schema_sql)`
+  where `schema_sql = Path("docs/schema.sql").read_text()`.
 
-For every user table (excluding `sqlite_%` and `alembic_version`), compare:
+For every user table (excluding `sqlite_%` and `alembic_version` on **both**
+sides), compare:
 
 | Aspect | Source | Normalization |
 |--------|--------|---------------|
 | Tables present | `sqlite_master` (type=table) | set equality |
-| Columns | `PRAGMA table_info(t)` | tuple `(name, type, notnull, dflt_value, pk)`; order-independent set per table — ignores clause ordering/formatting |
-| Foreign keys | `PRAGMA foreign_key_list(t)` | tuple `(table, from, to, on_update, on_delete, match)`; set per table |
-| Indexes | `PRAGMA index_list(t)` + `PRAGMA index_info` | `(name, unique, tuple(columns))`; set; exclude auto-indexes (`origin != 'c'` skipped only for unnamed) |
-| CHECK constraints | parsed from `sqlite_master.sql` | set of `(name, normalized_expr)` per table, where `normalized_expr` = the `CHECK(...)` body with whitespace collapsed and lower-cased; names compared too (this is what the rename fixes) |
+| Columns | `PRAGMA table_info(t)` | tuple `(name, type, notnull, dflt_value, pk)`; per-table set — ignores clause ordering/formatting |
+| Foreign keys | `PRAGMA foreign_key_list(t)` | tuple `(table, from, to, on_update, on_delete, match)`; per-table set |
+| Indexes | `PRAGMA index_list(t)` + `PRAGMA index_info` | `(name, unique, tuple(columns))`; per-table set; skip auto-indexes (`origin == 'pk'`/`'u'` retained only if named in both — in practice both DBs emit the same named indexes) |
+| CHECK constraints | parsed from `sqlite_master.sql` | per-table set of `(name, normalized_expr)`; `normalized_expr` = the `CHECK(...)` body, whitespace-collapsed and lower-cased. Names compared too — this is what the convention fix makes match. |
 
-The comparator yields a structured diff. The test asserts no differences; on
-mismatch it prints, per table, the symmetric difference of each aspect so the
-failure names exactly what drifted (e.g. `findings: check names only-in-migrations={...}`).
+The comparator returns a structured diff. The test asserts no differences; on
+mismatch it prints, per table and per aspect, the symmetric difference so the
+failure names exactly what drifted (e.g.
+`findings: check names only-in-migrations={...}`).
 
 Lives under `tests/unit/` so the existing `pytest tests/unit` CI step runs it;
 no `ci.yml` change required. Also runnable locally.
 
-CHECK-constraint extraction: a small regex over each table's `CREATE TABLE`
-text capturing `CONSTRAINT (<name>) CHECK (<expr>)`. SQLite preserves the
-original DDL text, so both sides parse with the same regex; only the captured
-name + whitespace-normalized expr are compared.
+CHECK extraction: a regex over each table's `CREATE TABLE` text capturing
+`CONSTRAINT (<name>) CHECK (<expr>)`. SQLite preserves original DDL text, so
+both sides parse with the same regex; only `(name, normalized_expr)` is compared.
 
 ## Data flow
 
 ```
 test_schema_sync:
-  DB-A  = temp file; FLOSSWING_DB_URL -> engine() auto-upgrades to head
-  DB-B  = temp file; executescript(read docs/schema.sql)
+  DB-A = temp file; FLOSSWING_DB_URL -> reset caches -> engine() upgrades head
+  DB-B = temp file; executescript(read docs/schema.sql)
   for each db: introspect -> {table: {columns, fks, indexes, checks}}
   diff(A, B) -> [] (pass) | structured per-table differences (fail w/ message)
 ```
@@ -164,46 +182,52 @@ test_schema_sync:
 - `schema.sql` must execute cleanly as a script (the test exercises this — a
   syntax error in the doc fails the test, which is desirable).
 - `alembic_version` (defined in **both** the migrations and `schema.sql`) and
-  `sqlite_%` internal tables are excluded from the comparison on both sides.
-- Auto-created indexes (from UNIQUE/PK) are excluded from the index set or
-  compared consistently on both sides (both DBs create them, so they match).
-- The structural introspection is read-only; temp DBs are cleaned up.
+  `sqlite_%` internal tables are excluded on both sides.
+- Auto-created indexes from UNIQUE/PK: both DBs create the same named indexes,
+  so they compare equal; unnamed internal autoindexes are excluded.
+- Introspection is read-only; temp DBs are removed after.
 
 ## Security considerations
 
-- Test-only + migration; no agent/network surface. No credentials involved.
-- The migration rebuilds tables via batch copy; row data is preserved. The
-  migration is verified against a **copy** of any real `state.db`, never the
-  original, before relying on it.
+- Test + a convention change only; no agent/network surface, no credentials.
+- No migration, no table rebuild, no change to existing databases.
 
 ## Testing strategy
 
 ### Unit (CI)
 
-- `test_schema_sync.py` — the structural comparator (above). The primary
-  deliverable and the ongoing guard.
+- `test_schema_sync.py` — the structural comparator (above). Primary deliverable
+  and the ongoing guard. After the convention + FK fixes it passes; it would
+  fail if a future migration drifts from `schema.sql` (including re-introducing
+  doubled names).
+- A focused `test_ck_naming_is_idempotent` (in the same file or alongside the
+  db tests) asserting that a `CheckConstraint` named with a full
+  `ck_<table>_<x>` and one named with bare `<x>` both resolve to
+  `ck_<table>_<x>` under the metadata convention.
 
-### Migration verification (manual + CI alembic step)
+### Migration round-trip (existing CI step)
 
-- CI's existing step runs `upgrade head` → `downgrade base` → `upgrade head`
-  against a temp SQLite DB. `002`'s `upgrade`/`downgrade` must both succeed.
-- Locally: apply `002` to a **copy** of `~/.flosswing/state.db` and confirm
-  row counts in affected tables are unchanged and constraint names are clean.
+- CI's existing step (`upgrade head` → `downgrade base` → `upgrade head`) must
+  stay green. The convention change affects only DDL name generation; `001`
+  up/down is otherwise unchanged.
 
 ## Definition of "done"
 
-- `002` renames all 46 doubled checks; fresh + existing upgrades converge to
-  clean names.
-- `schema.sql` declares the FK; `schema.sql` still executes as a script.
-- `test_schema_sync.py` passes (structural equality) and is in CI.
+- `ck` convention is idempotent; a fresh `upgrade head` yields 46 clean check
+  names (0 doubled).
+- `schema.sql` declares the FK and still executes as a script.
+- `test_schema_sync.py` passes (structural equality) and runs in CI; the
+  idempotency unit test passes.
 - alembic round-trip green; `ruff` + `mypy --strict` + `pytest tests/unit` green.
-- Migration diff shown for operator approval before commit (hand-written, but
-  the migration-review rule in `CLAUDE.md` applies).
+- No new migration; no change to existing databases.
 
 ## Open questions / decisions — RESOLVED 2026-06-15
 
-1. Reconcile direction → fix live schema to match the doc (clean names).
+1. Reconcile direction → fix the convention so fresh/CI schema is clean; do not
+   rebuild live DBs (legacy doubled names retained, harmless).
 2. FK → keep it; document in `schema.sql`.
 3. Comparator → structural via PRAGMA + parsed checks (ignores formatting and
    clause ordering).
 4. Check location → `tests/unit/test_schema_sync.py` (runs in existing CI step).
+5. Rename migration → NOT done; superseded by the idempotent-convention fix,
+   which is lower-risk and validated to produce clean fresh builds.
