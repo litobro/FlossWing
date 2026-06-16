@@ -34,15 +34,39 @@ def _excluded(name: str) -> bool:
 
 
 def _balanced_end(s: str, open_idx: int) -> int:
-    """Index of the ')' matching the '(' at ``open_idx``."""
+    """Index of the ')' matching the '(' at ``open_idx``.
+
+    Skips single-quoted string literals (honouring the ``''`` escape) and
+    ``-- ...`` line comments so a paren *inside* a CHECK string literal or an
+    inline comment does not throw off the depth count.
+    """
     depth = 0
-    for i in range(open_idx, len(s)):
-        if s[i] == "(":
+    i = open_idx
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "'":  # string literal — skip to its close, handling '' escape
+            i += 1
+            while i < n:
+                if s[i] == "'":
+                    if i + 1 < n and s[i + 1] == "'":
+                        i += 2
+                        continue
+                    break
+                i += 1
+            i += 1
+            continue
+        if ch == "-" and i + 1 < n and s[i + 1] == "-":  # line comment
+            while i < n and s[i] != "\n":
+                i += 1
+            continue
+        if ch == "(":
             depth += 1
-        elif s[i] == ")":
+        elif ch == ")":
             depth -= 1
             if depth == 0:
                 return i
+        i += 1
     raise ValueError("unbalanced parentheses")
 
 
@@ -61,8 +85,10 @@ def _named_constraints(table_sql: str, keyword: str) -> frozenset[tuple[str, str
 
 
 def _table_struct(conn: sqlite3.Connection, table: str) -> dict[str, frozenset]:
+    # cid (r[0]) is included so column *position* drift is detected, not just
+    # the set of column definitions.
     columns = frozenset(
-        (r[1], (r[2] or "").upper(), r[3], r[4], r[5])
+        (r[0], r[1], (r[2] or "").upper(), r[3], r[4], r[5])
         for r in conn.execute("SELECT * FROM pragma_table_info(?)", (table,))
     )
 
@@ -73,9 +99,16 @@ def _table_struct(conn: sqlite3.Connection, table: str) -> dict[str, frozenset]:
             r[0],
             {"table": r[2], "on_update": r[5], "on_delete": r[6], "match": r[7], "cols": []},
         )
-        d["cols"].append((r[3], r[4]))
+        d["cols"].append((r[1], r[3], r[4]))  # (seq, from, to)
+    # Preserve column order by seq so a reversed composite-FK mapping is caught.
     fks = frozenset(
-        (d["table"], tuple(sorted(d["cols"])), d["on_update"], d["on_delete"], d["match"])
+        (
+            d["table"],
+            tuple((f, t) for _seq, f, t in sorted(d["cols"])),
+            d["on_update"],
+            d["on_delete"],
+            d["match"],
+        )
         for d in by_id.values()
     )
 
@@ -93,9 +126,19 @@ def _table_struct(conn: sqlite3.Connection, table: str) -> dict[str, frozenset]:
         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone()
     table_sql = row[0] if row else ""
+    # FK/PK constraint *names* aren't exposed by PRAGMA; parse them from the DDL
+    # so a fk_/pk_ name drift is caught (the PRAGMA-based `fks` covers semantics).
+    fk_names = frozenset(
+        re.findall(r"CONSTRAINT\s+(\w+)\s+FOREIGN\s+KEY", table_sql, re.I)
+    )
+    pk_names = frozenset(
+        re.findall(r"CONSTRAINT\s+(\w+)\s+PRIMARY\s+KEY", table_sql, re.I)
+    )
     return {
         "columns": columns,
         "fks": fks,
+        "fk_names": fk_names,
+        "pk_names": pk_names,
         "indexes": frozenset(indexes),
         "checks": _named_constraints(table_sql, "CHECK"),
         "uniques": _named_constraints(table_sql, "UNIQUE"),
@@ -124,7 +167,9 @@ def _diff(mig: dict, doc: dict) -> list[str]:
         if t not in doc:
             msgs.append(f"table only in migrations: {t}")
             continue
-        for aspect in ("columns", "fks", "indexes", "checks", "uniques"):
+        for aspect in (
+            "columns", "fks", "fk_names", "pk_names", "indexes", "checks", "uniques"
+        ):
             only_mig = mig[t][aspect] - doc[t][aspect]
             only_doc = doc[t][aspect] - mig[t][aspect]
             if only_mig or only_doc:

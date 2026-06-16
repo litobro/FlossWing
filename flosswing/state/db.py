@@ -48,20 +48,27 @@ def _ck_constraint_name(constraint: CheckConstraint, table: Table) -> str:
     produces ``ck_<table>_nonneg`` as normal.  Both authoring styles are
     therefore idempotent.
     """
+    # Defensive scope guard: this callable is registered under the global
+    # "constraint_name" token but only the ``ck`` template uses it today. If a
+    # future template wires %(constraint_name)s for another constraint type,
+    # don't strip a ``ck_`` prefix or mutate it — return its name unchanged.
+    if not isinstance(constraint, CheckConstraint):
+        name = constraint.name
+        return name if isinstance(name, str) else ""
+
     name = constraint.name
     if not isinstance(name, str):
         raise InvalidRequestError(
             "Naming convention with %(constraint_name)s requires the "
             "CHECK constraint to be explicitly named."
         )
-    raw = name
     prefix = f"ck_{table.name}_"
     # Defensive: mirror SQLAlchemy's _key_constraint_name side-effect. In practice
     # _constraint_name overwrites name with conv(...) unconditionally, so this isn't
     # load-bearing today, but omitting it would diverge from the built-in's contract
     # and could break under a future SQLAlchemy refactor.
     constraint.name = None
-    return raw[len(prefix):] if raw.startswith(prefix) else raw
+    return name[len(prefix):] if name.startswith(prefix) else name
 
 
 NAMING_CONVENTION: dict[str, str | Callable[[CheckConstraint, Table], str]] = {

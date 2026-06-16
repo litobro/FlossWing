@@ -7,9 +7,11 @@
 -- `flosswing/state/migrations/versions/`. This file MUST stay in sync with the
 -- result of `alembic upgrade head` against an empty database.
 --
--- Sync check: a CI test runs `alembic upgrade head` against a temp SQLite DB,
--- dumps the schema via `.schema`, and compares against this file (normalized).
--- Drift fails the build.
+-- Sync check: `tests/unit/test_schema_sync.py` runs `alembic upgrade head`
+-- against a temp SQLite DB, builds a second temp DB by executing this file, and
+-- compares them *structurally* via PRAGMA introspection (columns incl. position,
+-- foreign keys, indexes, and CHECK/UNIQUE/FK/PK constraint names) — not a text
+-- dump, so formatting and clause ordering are ignored. Drift fails the build.
 --
 -- --- Alembic conventions for FlossWing ---------------------------------------
 --
