@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import ClassVar, cast
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding, BindingType
 from textual.screen import Screen
@@ -62,7 +63,9 @@ class RunsScreen(Screen[None]):
             rows = data.list_runs()
         except Exception as e:  # DB unreadable — show guidance, stop poll, never crash
             empty = self.query_one("#runs-empty", Static)
-            empty.update(f"Cannot read state.db: {errors.scrub(str(e))}")
+            # Text(...) renders literally — the scrubbed error is untrusted and
+            # may contain Rich-markup-like sequences.
+            empty.update(Text(f"Cannot read state.db: {errors.scrub(str(e))}"))
             table.clear()
             if self._poll is not None:
                 self._poll.stop()
@@ -73,7 +76,9 @@ class RunsScreen(Screen[None]):
         for r in rows:
             table.add_row(
                 r.short_id,
-                r.target_repo_path,
+                # repo path is operator/DB-derived — render literally so it
+                # can't be interpreted as Rich markup.
+                Text(r.target_repo_path),
                 r.status,
                 str(r.findings_count),
                 r.started_at,

@@ -325,6 +325,46 @@ async def test_findings_table_renders_markup_literally(seeded_db: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runs_table_renders_repo_path_literally(seeded_db: str) -> None:
+    """Untrusted repo paths must not be interpreted as Rich markup.
+
+    RunsScreen wraps the repo-path cell in rich.text.Text; seed a run whose
+    target_repo_path contains markup and assert it survives to the rendered
+    Repo column cell (index 1).
+    """
+    from rich.style import Style
+
+    with st_session.session_scope() as s:
+        s.add(
+            Run(
+                id="01JTESTRUN0000000000000001",
+                target_repo_path="/tmp/[bold]evil[/bold]",
+                target_repo_sha=None,
+                depth="standard",
+                budget_total=20,
+                budget_used=0,
+                started_at=_iso(),
+                finished_at=_iso(),
+                status="completed",
+                config_json="{}",
+                flosswing_version="test",
+            )
+        )
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#runs-table", DataTable)
+        rendered = ""
+        for row in range(table.row_count):
+            lines = table._render_cell(row, 1, Style(), width=80)
+            rendered += "".join(seg.text for line in lines for seg in line)
+        assert "[bold]evil[/bold]" in rendered
+
+
+@pytest.mark.asyncio
 async def test_new_scan_modal_spawns_scan(
     seeded_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
