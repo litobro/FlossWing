@@ -339,8 +339,7 @@ def findings_list(run_id: str) -> list[FindingListRow]:
     """Findings for a run in report display order, or [] if the run is absent."""
     if not _run_exists(run_id):
         return []
-    # TODO: swap to report.load_report() once the public wrapper lands on this branch.
-    report = report_stage._load(run_id, st_session.session_factory())
+    report = report_stage.load_report(run_id, st_session.session_factory())
     return [
         FindingListRow(
             id=f.id,
@@ -380,8 +379,7 @@ def finding_detail(run_id: str, finding_id: str) -> FindingDetail | None:
     """Full detail for one finding, or None if run/finding absent."""
     if not _run_exists(run_id):
         return None
-    # TODO: swap to report.load_report() once the public wrapper lands on this branch.
-    report = report_stage._load(run_id, st_session.session_factory())
+    report = report_stage.load_report(run_id, st_session.session_factory())
     match = next((f for f in report.findings if f.id == finding_id), None)
     if match is None:
         return None
