@@ -102,6 +102,42 @@ State (`runs`, `findings`, `agent_sessions`, etc.) is persisted to
 `~/.flosswing/state.db` — a SQLite database you can inspect with
 `sqlite3` directly.
 
+#### What a finding looks like
+
+Each confirmed finding gets its own `finding.md`. The example below is
+**illustrative — a synthetic finding on invented code, not a real
+disclosure** — but matches the exact format FlossWing emits:
+
+```markdown
+# Unauthenticated SSRF in the link-preview endpoint
+
+- **id:** `01J9ZQH4M7K2P5R8T3V6X0NDAB`
+- **attack class:** ssrf
+- **location:** `src/previews/fetch.py`:48-61 — `render_link_preview`
+- **badges:** severity: high, confidence: likely, status: confirmed, reachable: reachable
+
+## Description
+
+`render_link_preview` is reachable from the unauthenticated `POST /api/preview`
+route. The user-supplied `url` field flows into the outbound HTTP client with no
+scheme allowlist, host validation, or egress filtering, so an attacker can drive
+the server into issuing arbitrary outbound requests — including to the cloud
+instance-metadata service (e.g. `169.254.169.254`) and other internal-only hosts
+behind the application's network boundary. The Trace stage confirmed a call path
+from the route handler to the sink with no intervening authentication or
+validation.
+
+## Suggested fix
+
+Validate the target after DNS resolution, before fetching: require `https`,
+reject hosts resolving to private / link-local / loopback ranges, and prefer an
+explicit allowlist of permitted domains. Resolving after the check also closes
+the DNS-rebinding variant.
+```
+
+A sibling `poc.py` is written alongside and executed in the sandbox by the
+Validate stage; the example above is abbreviated and omits it.
+
 ### Re-render a previous run
 
 ```bash
