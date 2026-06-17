@@ -459,7 +459,11 @@ respect:
    data, not instructions.
 2. **PoC code is malicious by assumption.** All execution sandboxed.
 3. **The Claude API key is sensitive.** Never log it, never include it in error
-   messages, never write it to the state DB. Load from env or OS keychain only.
+   messages, never write it to the state DB. Read it from the environment / OS
+   keychain; an explicit operator `.env` may be loaded into the environment as a
+   convenience (see § Configuration precedence and § Auth credentials), but the
+   default `.env` auto-load is restricted to known credential/config keys so a
+   stray `.env` in an untrusted target repo cannot inject arbitrary variables.
 4. **Findings are sensitive.** A 0-day in a popular OSS project is dual-use. Default
    to local-only storage. No upload, no telemetry, no auto-submission.
 5. **FlossWing itself is not a defense.** A repo that passes a FlossWing scan with
@@ -471,9 +475,14 @@ Highest to lowest:
 
 1. CLI flags
 2. Environment variables (`FLOSSWING_*`)
-3. Per-repo config: `<target>/.flosswing/config.toml`
-4. User config: `~/.config/flosswing/config.toml`
-5. Built-in defaults
+3. A local `.env`, loaded into the environment at startup with `setdefault`
+   semantics (so it ranks just below the already-set environment). The default
+   `.env` auto-load is restricted to known credential/config keys;
+   `--env-file PATH` loads all keys from an explicitly-trusted file;
+   `--no-env-file` disables both.
+4. Per-repo config: `<target>/.flosswing/config.toml`
+5. User config: `~/.config/flosswing/config.toml`
+6. Built-in defaults
 
 Auth credentials (three accepted modes — pick whichever fits your environment):
 
@@ -484,9 +493,18 @@ Auth credentials (three accepted modes — pick whichever fits your environment)
    `AZURE_CLIENT_SECRET` for service principals) — Entra ID against Foundry.
 
 Whichever set is present is forwarded verbatim to the spawned `claude` CLI via
-`ClaudeAgentOptions.env`. Credentials are env / OS keychain only — never config files,
-never the state DB, never logs. See `docs/specs/2026-05-25-v0.2-recon-plumbing-design.md`
-§ Authentication for rationale.
+`ClaudeAgentOptions.env`. Credentials are read from the environment / OS keychain. As an
+operator convenience the CLI also loads a local `.env` into the environment at startup
+(working-directory file by default, or `--env-file PATH`; `--no-env-file` disables it) so
+the TUI and its spawned `flosswing scan` children pick up credentials without a manual
+`source`. The already-set environment always wins (`setdefault`), the file must stay
+git-ignored, and only a count of loaded variables is printed — never names or values.
+The default `.env` auto-load is restricted to known credential/config keys
+(`config.AUTH_ENV_KEYS`) so a `.env` planted in an untrusted target repo cannot inject
+arbitrary environment variables; `--env-file PATH` loads all keys from a file the
+operator explicitly trusts. Credentials are never written to the state DB and never
+logged. See
+`docs/specs/2026-05-25-v0.2-recon-plumbing-design.md` § Authentication for rationale.
 
 ## v1 scope summary
 

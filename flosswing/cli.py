@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -50,8 +51,54 @@ def _parse_formats(value: str) -> list[str]:
 
 @click.group()
 @click.version_option(package_name="flosswing")
-def main() -> None:
+@click.option(
+    "--env-file",
+    "env_file",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help=(
+        "Explicitly load ALL variables from this file into the environment before "
+        "running (you are trusting this file). Without it, a local .env is loaded "
+        "but restricted to known credential/config keys. --no-env-file disables both."
+    ),
+)
+@click.option(
+    "--no-env-file",
+    "no_env_file",
+    is_flag=True,
+    default=False,
+    help="Do not load any .env file.",
+)
+def main(env_file: str | None, no_env_file: bool) -> None:
     """FlossWing: local-CLI vulnerability research harness."""
+    # Operator convenience: load a local .env into the environment so commands
+    # (and TUI-spawned `flosswing scan` children) pick up credentials without a
+    # manual `source`. The real environment always takes precedence (setdefault),
+    # and only a COUNT is ever printed (never names/values). FLOSSWING_DISABLE_DOTENV
+    # is a hermeticity escape hatch (the test suite sets it so it never slurps a
+    # real .env).
+    if no_env_file or os.environ.get("FLOSSWING_DISABLE_DOTENV"):
+        return
+    from flosswing import envfile
+
+    if env_file is None:
+        # Default convenience load: restricted to known credential/config keys so
+        # a stray .env (e.g. inside an untrusted target repo the operator runs
+        # from) cannot inject arbitrary environment variables.
+        from flosswing.config import AUTH_ENV_KEYS
+
+        source = ".env"
+        loaded = envfile.load_env_file(Path(source), allowed_keys=AUTH_ENV_KEYS)
+    else:
+        # Explicit file: the operator is deliberately trusting it; load everything.
+        source = env_file
+        loaded = envfile.load_env_file(Path(source))
+    if loaded:
+        click.echo(
+            f"Loaded {loaded} variable(s) from {source} "
+            "(existing environment takes precedence).",
+            err=True,
+        )
 
 
 @main.command()

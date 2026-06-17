@@ -91,6 +91,22 @@ _FOUNDRY_MODEL_KEYS: tuple[str, ...] = (
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 )
 
+# Every auth/routing/model variable FlossWing reads from the environment. The
+# default `.env` auto-load (flosswing/cli.py) is restricted to this allowlist so
+# a stray `.env` — e.g. one planted in an untrusted target repo the operator
+# happens to run from — cannot inject arbitrary environment variables (proxies,
+# PYTHONPATH, etc.). An explicit `--env-file PATH` bypasses the restriction
+# (that is the operator deliberately trusting a specific file).
+AUTH_ENV_KEYS: frozenset[str] = frozenset(
+    (
+        *_DIRECT_KEYS,
+        *_FOUNDRY_ROUTING_KEYS,
+        _FOUNDRY_API_KEY,
+        *_ENTRA_SP_KEYS,
+        *_FOUNDRY_MODEL_KEYS,
+    )
+)
+
 
 @dataclass(frozen=True)
 class Config:
