@@ -55,11 +55,11 @@ def _parse_formats(value: str) -> list[str]:
     "--env-file",
     "env_file",
     type=click.Path(dir_okay=False),
-    default=".env",
-    show_default=True,
+    default=None,
     help=(
-        "Load variables from this file into the environment if it exists, before "
-        "running. Already-set variables always win. Use --no-env-file to disable."
+        "Explicitly load ALL variables from this file into the environment before "
+        "running (you are trusting this file). Without it, a local .env is loaded "
+        "but restricted to known credential/config keys. --no-env-file disables both."
     ),
 )
 @click.option(
@@ -69,21 +69,33 @@ def _parse_formats(value: str) -> list[str]:
     default=False,
     help="Do not load any .env file.",
 )
-def main(env_file: str, no_env_file: bool) -> None:
+def main(env_file: str | None, no_env_file: bool) -> None:
     """FlossWing: local-CLI vulnerability research harness."""
     # Operator convenience: load a local .env into the environment so commands
     # (and TUI-spawned `flosswing scan` children) pick up credentials without a
     # manual `source`. The real environment always takes precedence (setdefault),
-    # and no value is ever logged. FLOSSWING_DISABLE_DOTENV is a hermeticity
-    # escape hatch (the test suite sets it so it never slurps a real .env).
+    # and only a COUNT is ever printed (never names/values). FLOSSWING_DISABLE_DOTENV
+    # is a hermeticity escape hatch (the test suite sets it so it never slurps a
+    # real .env).
     if no_env_file or os.environ.get("FLOSSWING_DISABLE_DOTENV"):
         return
     from flosswing import envfile
 
-    loaded = envfile.load_env_file(Path(env_file))
+    if env_file is None:
+        # Default convenience load: restricted to known credential/config keys so
+        # a stray .env (e.g. inside an untrusted target repo the operator runs
+        # from) cannot inject arbitrary environment variables.
+        from flosswing.config import AUTH_ENV_KEYS
+
+        source = ".env"
+        loaded = envfile.load_env_file(Path(source), allowed_keys=AUTH_ENV_KEYS)
+    else:
+        # Explicit file: the operator is deliberately trusting it; load everything.
+        source = env_file
+        loaded = envfile.load_env_file(Path(source))
     if loaded:
         click.echo(
-            f"Loaded {loaded} variable(s) from {env_file} "
+            f"Loaded {loaded} variable(s) from {source} "
             "(existing environment takes precedence).",
             err=True,
         )

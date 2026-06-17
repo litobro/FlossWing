@@ -92,3 +92,49 @@ def test_skips_malformed_lines(
 
 def test_missing_file_is_noop(tmp_path: Path) -> None:
     assert load_env_file(tmp_path / "does-not-exist.env") == 0
+
+
+def test_strips_inline_comment_unquoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FW_IC", raising=False)
+    load_env_file(_write(tmp_path, "FW_IC=value  # trailing comment\n"))
+    import os
+
+    assert os.environ["FW_IC"] == "value"
+
+
+def test_strips_inline_comment_after_quoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FW_ICQ", raising=False)
+    load_env_file(_write(tmp_path, 'FW_ICQ="sk-secret"  # main key\n'))
+    import os
+
+    assert os.environ["FW_ICQ"] == "sk-secret"
+
+
+def test_bare_hash_without_space_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FW_HASH", raising=False)
+    load_env_file(_write(tmp_path, "FW_HASH=pa#ss\n"))
+    import os
+
+    assert os.environ["FW_HASH"] == "pa#ss"
+
+
+def test_allowed_keys_filters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FW_KEEP_ME", raising=False)
+    monkeypatch.delenv("FW_DROP_ME", raising=False)
+    n = load_env_file(
+        _write(tmp_path, "FW_KEEP_ME=yes\nFW_DROP_ME=no\n"),
+        allowed_keys=frozenset({"FW_KEEP_ME"}),
+    )
+    import os
+
+    assert n == 1
+    assert os.environ["FW_KEEP_ME"] == "yes"
+    assert "FW_DROP_ME" not in os.environ

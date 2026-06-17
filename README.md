@@ -65,8 +65,11 @@ software. Use it accordingly:
 > automatically at startup — so you can keep your key(s) there instead of
 > exporting them each session, and the `flosswing tui` dashboard's "new scan"
 > picks them up too. Your already-set environment always takes precedence, and
-> `--no-env-file` disables loading. **Keep `.env` out of version control** (it's
-> git-ignored by default) — it holds secrets.
+> `--no-env-file` disables loading. The default `.env` load is restricted to
+> known credential/config variables (so a stray `.env` can't inject arbitrary
+> environment vars); use `--env-file PATH` to load every key from a file you
+> explicitly trust. **Keep `.env` out of version control** (it's git-ignored by
+> default) — it holds secrets.
 
 > **Cost:** a scan runs a multi-stage Claude (Opus-class) agent pipeline, so it
 > consumes meaningful API credit — this is BYO-key and you pay for the tokens.

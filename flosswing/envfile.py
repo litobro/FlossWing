@@ -31,17 +31,43 @@ Two invariants keep it safe:
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
+# An inline comment on an unquoted value is a ``#`` introduced by whitespace
+# (a bare ``#`` with no preceding space is kept, e.g. ``pass#word``).
+_INLINE_COMMENT = re.compile(r"\s#")
 
-def load_env_file(path: Path) -> int:
+
+def _parse_value(raw: str) -> str:
+    """Parse the right-hand side of a ``KEY=`` line into its value.
+
+    Strips a single layer of matching surrounding quotes; for a quoted value,
+    anything after the closing quote (e.g. an inline comment) is dropped. For an
+    unquoted value, an inline ``#`` comment introduced by whitespace is dropped.
+    """
+    value = raw.strip()
+    if value[:1] in ("'", '"'):
+        quote = value[0]
+        end = value.find(quote, 1)
+        return value[1:end] if end != -1 else value[1:]
+    match = _INLINE_COMMENT.search(value)
+    if match is not None:
+        value = value[: match.start()]
+    return value.strip()
+
+
+def load_env_file(path: Path, allowed_keys: frozenset[str] | None = None) -> int:
     """Apply ``KEY=VALUE`` lines from ``path`` to ``os.environ`` (setdefault).
 
-    Skips blank lines, ``#`` comments, an optional leading ``export``, and any
-    malformed line (no ``=`` or a non-identifier key). A single layer of matching
-    surrounding single/double quotes is stripped from values. A missing or
-    unreadable file is a no-op. Returns the number of variables newly set (those
-    not already present in the environment); never logs or returns any value.
+    Skips blank lines, full-line and inline ``#`` comments, an optional leading
+    ``export``, and any malformed line (no ``=`` or a non-identifier key). A
+    single layer of matching surrounding quotes is stripped from values. If
+    ``allowed_keys`` is given, only those variable names are applied (everything
+    else is ignored) — used to restrict the default ``.env`` auto-load to known
+    credential/config keys. A missing or unreadable file is a no-op. Returns the
+    number of variables newly set (those not already present in the environment);
+    never logs or returns any variable name or value.
     """
     if not path.is_file():
         return 0
@@ -57,16 +83,15 @@ def load_env_file(path: Path) -> int:
             continue
         if line.startswith("export "):
             line = line[len("export ") :].lstrip()
-        key, sep, value = line.partition("=")
+        key, sep, raw_value = line.partition("=")
         if not sep:
             continue  # malformed: no '='
         key = key.strip()
         if not key.isidentifier():
             continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
+        if allowed_keys is not None and key not in allowed_keys:
+            continue
         if key not in os.environ:
-            os.environ[key] = value
+            os.environ[key] = _parse_value(raw_value)
             set_count += 1
     return set_count

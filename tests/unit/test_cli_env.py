@@ -27,24 +27,30 @@ from click.testing import CliRunner
 
 from flosswing.cli import main
 
+# An allowlisted (known config) key vs. a non-allowlisted arbitrary key.
+_ALLOWED = "ANTHROPIC_DEFAULT_OPUS_MODEL"  # in config.AUTH_ENV_KEYS
+_DENIED = "FW_CLI_ENV_PROBE"  # not in the allowlist
+
 
 @pytest.fixture()
-def _clean_var() -> Iterator[None]:
-    # The code under test writes directly to os.environ; ensure the probe var is
-    # absent before and removed after so the test stays hermetic.
-    for v in ("FW_CLI_ENV_PROBE",):
+def _clean_vars() -> Iterator[None]:
+    # The code under test writes directly to os.environ; ensure the probe vars
+    # are absent before and removed after so the test stays hermetic.
+    for v in (_ALLOWED, _DENIED):
         os.environ.pop(v, None)
     yield
-    for v in ("FW_CLI_ENV_PROBE",):
+    for v in (_ALLOWED, _DENIED):
         os.environ.pop(v, None)
 
 
-def _write_env(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("FW_CLI_ENV_PROBE=loaded\n", encoding="utf-8")
+def _write_env(tmp_path: Path, name: str = ".env") -> Path:
+    p = tmp_path / name
+    p.write_text(f"{_ALLOWED}=probe-allowed\n{_DENIED}=probe-denied\n", encoding="utf-8")
+    return p
 
 
-def test_dotenv_autoloaded_from_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clean_var: None
+def test_default_autoload_is_allowlisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clean_vars: None
 ) -> None:
     monkeypatch.delenv("FLOSSWING_DISABLE_DOTENV", raising=False)  # undo conftest guard
     monkeypatch.chdir(tmp_path)
@@ -52,11 +58,26 @@ def test_dotenv_autoloaded_from_cwd(
 
     res = CliRunner().invoke(main, ["eval", "--help"])
     assert res.exit_code == 0, res.output
-    assert os.environ.get("FW_CLI_ENV_PROBE") == "loaded"
+    # Known config key loads; arbitrary key is filtered out by the allowlist.
+    assert os.environ.get(_ALLOWED) == "probe-allowed"
+    assert _DENIED not in os.environ
+
+
+def test_explicit_env_file_loads_all_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clean_vars: None
+) -> None:
+    monkeypatch.delenv("FLOSSWING_DISABLE_DOTENV", raising=False)
+    monkeypatch.chdir(tmp_path)
+    _write_env(tmp_path, name="custom.env")
+
+    res = CliRunner().invoke(main, ["--env-file", "custom.env", "eval", "--help"])
+    assert res.exit_code == 0, res.output
+    # Explicit file = operator trust: even the non-allowlisted key loads.
+    assert os.environ.get(_DENIED) == "probe-denied"
 
 
 def test_no_env_file_flag_disables_load(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clean_var: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clean_vars: None
 ) -> None:
     monkeypatch.delenv("FLOSSWING_DISABLE_DOTENV", raising=False)
     monkeypatch.chdir(tmp_path)
@@ -64,11 +85,12 @@ def test_no_env_file_flag_disables_load(
 
     res = CliRunner().invoke(main, ["--no-env-file", "eval", "--help"])
     assert res.exit_code == 0, res.output
-    assert "FW_CLI_ENV_PROBE" not in os.environ
+    assert _ALLOWED not in os.environ
+    assert _DENIED not in os.environ
 
 
 def test_disable_guard_blocks_load(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clean_var: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clean_vars: None
 ) -> None:
     # Guard left in place (as the conftest sets it) → no auto-load.
     monkeypatch.setenv("FLOSSWING_DISABLE_DOTENV", "1")
@@ -77,4 +99,4 @@ def test_disable_guard_blocks_load(
 
     res = CliRunner().invoke(main, ["eval", "--help"])
     assert res.exit_code == 0, res.output
-    assert "FW_CLI_ENV_PROBE" not in os.environ
+    assert _ALLOWED not in os.environ
