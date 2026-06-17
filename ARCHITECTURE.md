@@ -484,9 +484,14 @@ Auth credentials (three accepted modes — pick whichever fits your environment)
    `AZURE_CLIENT_SECRET` for service principals) — Entra ID against Foundry.
 
 Whichever set is present is forwarded verbatim to the spawned `claude` CLI via
-`ClaudeAgentOptions.env`. Credentials are env / OS keychain only — never config files,
-never the state DB, never logs. See `docs/specs/2026-05-25-v0.2-recon-plumbing-design.md`
-§ Authentication for rationale.
+`ClaudeAgentOptions.env`. Credentials are read from the environment / OS keychain. As an
+operator convenience the CLI also loads a local `.env` into the environment at startup
+(working-directory file by default, or `--env-file PATH`; `--no-env-file` disables it) so
+the TUI and its spawned `flosswing scan` children pick up credentials without a manual
+`source`. The already-set environment always wins (`setdefault`), the file must stay
+git-ignored, and only a count of loaded variables is printed — never names or values.
+Credentials are never written to the state DB and never logged. See
+`docs/specs/2026-05-25-v0.2-recon-plumbing-design.md` § Authentication for rationale.
 
 ## v1 scope summary
 

@@ -60,6 +60,14 @@ software. Use it accordingly:
   - A valid `az login` session.
 - The target repo cloned locally.
 
+> **Credentials & `.env`:** FlossWing reads auth from the environment. For
+> convenience, a `.env` file in the directory you run from is loaded
+> automatically at startup — so you can keep your key(s) there instead of
+> exporting them each session, and the `flosswing tui` dashboard's "new scan"
+> picks them up too. Your already-set environment always takes precedence, and
+> `--no-env-file` disables loading. **Keep `.env` out of version control** (it's
+> git-ignored by default) — it holds secrets.
+
 > **Cost:** a scan runs a multi-stage Claude (Opus-class) agent pipeline, so it
 > consumes meaningful API credit — this is BYO-key and you pay for the tokens.
 > As a rough data point, one scan of a mid-sized real-world Python web app

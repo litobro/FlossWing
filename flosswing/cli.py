@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -50,8 +51,42 @@ def _parse_formats(value: str) -> list[str]:
 
 @click.group()
 @click.version_option(package_name="flosswing")
-def main() -> None:
+@click.option(
+    "--env-file",
+    "env_file",
+    type=click.Path(dir_okay=False),
+    default=".env",
+    show_default=True,
+    help=(
+        "Load variables from this file into the environment if it exists, before "
+        "running. Already-set variables always win. Use --no-env-file to disable."
+    ),
+)
+@click.option(
+    "--no-env-file",
+    "no_env_file",
+    is_flag=True,
+    default=False,
+    help="Do not load any .env file.",
+)
+def main(env_file: str, no_env_file: bool) -> None:
     """FlossWing: local-CLI vulnerability research harness."""
+    # Operator convenience: load a local .env into the environment so commands
+    # (and TUI-spawned `flosswing scan` children) pick up credentials without a
+    # manual `source`. The real environment always takes precedence (setdefault),
+    # and no value is ever logged. FLOSSWING_DISABLE_DOTENV is a hermeticity
+    # escape hatch (the test suite sets it so it never slurps a real .env).
+    if no_env_file or os.environ.get("FLOSSWING_DISABLE_DOTENV"):
+        return
+    from flosswing import envfile
+
+    loaded = envfile.load_env_file(Path(env_file))
+    if loaded:
+        click.echo(
+            f"Loaded {loaded} variable(s) from {env_file} "
+            "(existing environment takes precedence).",
+            err=True,
+        )
 
 
 @main.command()
