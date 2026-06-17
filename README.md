@@ -149,6 +149,8 @@ after `--no-report`, or after a render failure during the scan.
 
 ### Browse runs and findings (interactive dashboard)
 
+![FlossWing's terminal dashboard — a list of past scan runs showing repo, status, finding count, and start time (repo paths redacted).](docs/sample.jpg)
+
 ```bash
 flosswing tui
 ```
