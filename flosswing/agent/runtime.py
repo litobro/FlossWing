@@ -43,8 +43,7 @@ SDK shape notes (verified against installed claude-agent-sdk):
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -54,91 +53,14 @@ from claude_agent_sdk import (
     query,
 )
 
-from flosswing.errors import scrub
+from flosswing.agent.providers.base import (  # re-exported for callers/tests
+    OutcomeLiteral,
+    Provider,
+    SessionResult,
+    _classify,
+)
 
-OutcomeLiteral = Literal[
-    "completed", "refused", "budget_exceeded", "timed_out", "errored"
-]
-
-
-@dataclass
-class SessionResult:
-    outcome: OutcomeLiteral
-    input_tokens: int
-    output_tokens: int
-    cache_read_tokens: int
-    cache_write_tokens: int
-    duration_ms: int
-    tool_calls_count: int
-    refusal_text: str | None
-    error_text: str | None
-
-
-def _classify(
-    *,
-    stop_reason: str | None,
-    usage: dict[str, int],
-    refusal_text: str | None,
-    budget: int,
-    api_error: str | None,
-) -> SessionResult:
-    """Map terminal session state to a SessionResult.
-
-    Pure function — no SDK imports needed at call sites. Precedence
-    matches the spec: api_error > refusal > budget > completed.
-    """
-    input_tokens = int(usage.get("input_tokens", 0))
-    output_tokens = int(usage.get("output_tokens", 0))
-    cache_read = int(usage.get("cache_read_tokens", 0))
-    cache_write = int(usage.get("cache_write_tokens", 0))
-
-    if api_error:
-        return SessionResult(
-            outcome="errored",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=cache_read,
-            cache_write_tokens=cache_write,
-            duration_ms=0,
-            tool_calls_count=0,
-            refusal_text=None,
-            error_text=scrub(api_error),
-        )
-    if stop_reason == "refusal" or refusal_text:
-        return SessionResult(
-            outcome="refused",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=cache_read,
-            cache_write_tokens=cache_write,
-            duration_ms=0,
-            tool_calls_count=0,
-            refusal_text=scrub(refusal_text or ""),
-            error_text=None,
-        )
-    if input_tokens > budget:
-        return SessionResult(
-            outcome="budget_exceeded",
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=cache_read,
-            cache_write_tokens=cache_write,
-            duration_ms=0,
-            tool_calls_count=0,
-            refusal_text=None,
-            error_text=None,
-        )
-    return SessionResult(
-        outcome="completed",
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_tokens=cache_read,
-        cache_write_tokens=cache_write,
-        duration_ms=0,
-        tool_calls_count=0,
-        refusal_text=None,
-        error_text=None,
-    )
+__all__ = ["OutcomeLiteral", "Provider", "SessionResult", "_classify", "run_session"]
 
 
 def _api_error_from_result(
