@@ -71,7 +71,8 @@ signature are preserved so the six stage modules need only add one argument.
 ```python
 class Provider(Protocol):
     name: str
-    required_env_keys: frozenset[str]   # auth/config keys this provider reads from env
+    auth_env_keys: frozenset[str]   # auth/config keys this provider reads from env
+                                    # (alternatives, not all-required)
     def validate_auth(self, env: Mapping[str, str]) -> None: ...  # raise AuthCredentialMissingError
     async def run_session(
         self, *, model: str, system_prompt: str, tools: list[Any],
@@ -81,8 +82,11 @@ class Provider(Protocol):
     ) -> SessionResult: ...
 ```
 
-- `SessionResult` (the existing dataclass) **moves to `base.py`** — it is the
-  provider-agnostic return contract.
+- `SessionResult` (the existing dataclass) is **defined in `base.py`** — it is the
+  provider-agnostic return contract — and **re-exported from `runtime.py`**
+  (`from .providers.base import SessionResult`). Six existing test modules import
+  it via `from flosswing.agent.runtime import SessionResult`; the re-export keeps
+  that path working unchanged.
 - The outcome taxonomy (`completed / refused / budget_exceeded / timed_out /
   errored`) and the pure `_classify()` mapping are **shared** in `base.py`; they
   describe FlossWing's session contract, not anything Anthropic-specific.
@@ -92,7 +96,7 @@ class Provider(Protocol):
 ### AnthropicSDKProvider (`anthropic_sdk.py`)
 
 A faithful relocation of the current `runtime.py` body — no behavioral change.
-`name = "anthropic"`. `required_env_keys` is the existing Anthropic/Foundry/Entra
+`name = "anthropic"`. `auth_env_keys` is the existing Anthropic/Foundry/Entra
 key set (see Config below). `validate_auth()` contains the auth-path check that
 currently lives inline in `config.resolve()` (direct key OR Foundry routing +
 one of {Foundry key, Entra SP triple, az-login session}), raising the same
@@ -114,9 +118,16 @@ one of {Foundry key, Entra SP triple, az-login session}), raising the same
 
 - New field `Config.provider: str`, default `"anthropic"`.
 - New CLI flag `--provider` on `flosswing scan`, threaded into `eval` for parity.
-- `config.resolve(provider=...)` resolution order matches `model`: CLI flag →
-  env (`FLOSSWING_PROVIDER`) → (config.toml *iff* `model` is already toml-loaded;
-  match whatever `model` does today) → default `"anthropic"`.
+- `config.resolve(provider=...)` resolution order: **CLI flag →
+  `FLOSSWING_PROVIDER` env → default `"anthropic"`**. There is no app-level
+  `config.toml` loading in the codebase today (`tomllib` is used only for eval
+  corpus manifests), so the precedence chain documented in `ARCHITECTURE.md:479`
+  is aspirational; `model` itself is CLI-flag-only. Provider selection
+  deliberately adds the `FLOSSWING_PROVIDER` env override (operator convenience
+  for scripted/CI runs); `model` has no env equivalent today, so this is a small,
+  intentional divergence.
+- `FLOSSWING_PROVIDER` is **not** added to `AUTH_ENV_KEYS`, so a `.env` planted in
+  an untrusted target repo cannot flip the provider via the default auto-load.
 - **Auth becomes provider-delegated.** `resolve()` looks up the selected provider
   and calls `provider.validate_auth(os.environ)`. For `anthropic` this reproduces
   today's behavior and error message exactly (the logic relocates, unchanged).
@@ -129,11 +140,13 @@ one of {Foundry key, Entra SP triple, az-login session}), raising the same
 
 `config.AUTH_ENV_KEYS` (the allowlist that restricts the default `.env`
 auto-load so a planted `.env` cannot inject arbitrary env vars) is **derived from
-`AnthropicSDKProvider.required_env_keys`** rather than kept as a standalone
+`AnthropicSDKProvider.auth_env_keys`** rather than kept as a standalone
 literal. Value is unchanged for this PR (Anthropic is the only real provider). A
 future real provider extends the allowlist simply by declaring its keys, and the
 security property is preserved automatically. A unit test locks
-`AUTH_ENV_KEYS == AnthropicSDKProvider.required_env_keys`.
+`AUTH_ENV_KEYS == AnthropicSDKProvider.auth_env_keys`. Note `FLOSSWING_PROVIDER`
+is intentionally excluded — provider selection is not a credential and must not be
+settable by an auto-loaded `.env`.
 
 No credential value is ever logged, persisted to the state DB, or placed in an
 error message. New provider error strings route through `errors.scrub()` like
@@ -163,7 +176,10 @@ HTTP). No integration/eval changes needed — Anthropic behavior is unchanged.
   `validate_auth` reproduces today's missing-credential error.
 - Regression guard: drive `run_session(provider="anthropic")` through the mocked
   SDK and assert the same `SessionResult` as the pre-refactor code path.
-- `AUTH_ENV_KEYS == AnthropicSDKProvider.required_env_keys`.
+- `AUTH_ENV_KEYS == AnthropicSDKProvider.auth_env_keys`; `FLOSSWING_PROVIDER` is
+  not in `AUTH_ENV_KEYS`.
+- `config.resolve` reads `FLOSSWING_PROVIDER` when no `--provider` flag is given,
+  and the flag wins over the env var.
 
 ## Files touched
 
