@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+from flosswing.agent.providers import registry
 from flosswing.agent.providers.base import (  # re-exported for callers/tests
     OutcomeLiteral,
     Provider,
@@ -53,8 +53,6 @@ from flosswing.agent.providers.base import (  # re-exported for callers/tests
 )
 
 __all__ = ["OutcomeLiteral", "Provider", "SessionResult", "_classify", "run_session"]
-
-_ANTHROPIC = AnthropicSDKProvider()
 
 
 async def run_session(
@@ -70,13 +68,11 @@ async def run_session(
     task_id: str | None = None,
     finding_id: str | None = None,
     agent_session_id: str | None = None,
+    provider: str = "anthropic",
 ) -> SessionResult:
-    """Drive one agent session via the default Anthropic provider.
-
-    Provider selection (registry-based) is added in a later task; for now
-    this delegates straight to the Anthropic SDK backend.
-    """
-    return await _ANTHROPIC.run_session(
+    """Drive one agent session via the selected provider (default anthropic)."""
+    prov = registry.get_provider(provider)
+    return await prov.run_session(
         model=model,
         system_prompt=system_prompt,
         tools=tools,
