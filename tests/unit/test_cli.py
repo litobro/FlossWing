@@ -22,7 +22,7 @@ Per docs/specs/2026-06-15-provider-abstraction § Task 7.
 from __future__ import annotations
 
 
-def test_scan_rejects_unimplemented_provider(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_scan_rejects_unimplemented_provider(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]  # pytest monkeypatch/tmp_path fixtures are untyped
     from click.testing import CliRunner
 
     from flosswing.cli import main

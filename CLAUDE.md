@@ -81,7 +81,7 @@ Top-level orientation:
 - **Ask before scope-creeping.** If a task says "implement X" and you find yourself implementing X + Y because Y "is obviously needed," stop. Y might be a non-goal you didn't notice. Surface it instead.
 - **Don't edit `ARCHITECTURE.md`, `docs/tool-contracts.md`, `docs/schema.sql`, or this file** without an explicit instruction to do so. These are operator-curated. If you think one needs a change, propose the diff in chat and wait.
 - **Don't add features marked v2 in `ARCHITECTURE.md`** even if they're easy. Deferred is deferred.
-- **Match the v1/v2 scope exactly.** Cross-repo trace, auto-disclosure, Feedback stage, plugin systems, non-Anthropic providers, additional languages — all v2, don't touch.
+- **Match the v1/v2 scope exactly.** Cross-repo trace, auto-disclosure, Feedback stage, plugin systems, additional languages — all v2, don't touch. (The model-provider abstraction was promoted to v1 per operator decision 2026-06-17; Anthropic is the only working backend, others are unimplemented stubs.)
 - **Plan before implementing on multi-file changes.** State the files you'll touch, the order, and the test you'll run to verify. Wait for approval on anything spanning more than 3 files.
 - **Commit messages reference the spec.** "Implement record_finding per docs/tool-contracts.md § findings (Hunt-side)" is the right shape. "Add finding support" is not.
 

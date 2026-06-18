@@ -25,7 +25,7 @@ from flosswing.agent.providers import registry as reg
 from flosswing.agent.providers.base import SessionResult
 
 
-def test_run_session_routes_to_named_provider(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_run_session_routes_to_named_provider(monkeypatch) -> None:  # type: ignore[no-untyped-def]  # pytest monkeypatch fixture is untyped
     sentinel = SessionResult(
         outcome="completed", input_tokens=0, output_tokens=0,
         cache_read_tokens=0, cache_write_tokens=0, duration_ms=0,
