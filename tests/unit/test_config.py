@@ -20,7 +20,11 @@ import pytest
 from flosswing import config as cfg_mod
 from flosswing import config as fcfg
 from flosswing.config import Config, resolve
-from flosswing.errors import AuthCredentialMissingError
+from flosswing.errors import (
+    AuthCredentialMissingError,
+    ProviderNotImplementedError,
+    UnknownProviderError,
+)
 
 _ALL_AUTH_ENV: tuple[str, ...] = (
     "ANTHROPIC_API_KEY",
@@ -39,8 +43,10 @@ _ALL_AUTH_ENV: tuple[str, ...] = (
 def _strip_all_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     for k in _ALL_AUTH_ENV:
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.delenv("FLOSSWING_PROVIDER", raising=False)
     # Block any az-login probe; tests opt back in by re-patching.
-    monkeypatch.setattr(cfg_mod, "_has_az_session", lambda: False)
+    from flosswing.agent.providers import anthropic_sdk
+    monkeypatch.setattr(anthropic_sdk, "_has_az_session", lambda: False)
 
 
 def test_resolves_with_anthropic_api_key(
@@ -92,7 +98,8 @@ def test_resolves_with_foundry_routing_and_az_login(
     _strip_all_auth(monkeypatch)
     monkeypatch.setenv("CLAUDE_CODE_USE_FOUNDRY", "1")
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "test-resource")
-    monkeypatch.setattr(cfg_mod, "_has_az_session", lambda: True)
+    from flosswing.agent.providers import anthropic_sdk
+    monkeypatch.setattr(anthropic_sdk, "_has_az_session", lambda: True)
     cfg = resolve(
         repo_root=tmp_path,
         model=None,
@@ -541,3 +548,66 @@ def test_resolve_uses_cli_output_dir_when_passed(
         output_dir=target,
     )
     assert cfg.output_dir == target
+
+
+def test_default_provider_is_anthropic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.delenv("FLOSSWING_PROVIDER", raising=False)
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None,
+    )
+    assert cfg.provider == "anthropic"
+
+
+def test_flag_beats_env_for_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("FLOSSWING_PROVIDER", "ollama")
+    # flag says anthropic -> wins; resolve succeeds
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="anthropic",
+    )
+    assert cfg.provider == "anthropic"
+
+
+def test_env_selects_provider_when_no_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("FLOSSWING_PROVIDER", "ollama")
+    with pytest.raises(ProviderNotImplementedError):
+        resolve(
+            repo_root=tmp_path, model=None, recon_token_budget=None,
+            hunt_token_budget=None, validate_token_budget=None,
+            gapfill_token_budget=None,
+        )
+
+
+def test_unknown_provider_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    with pytest.raises(UnknownProviderError):
+        resolve(
+            repo_root=tmp_path, model=None, recon_token_budget=None,
+            hunt_token_budget=None, validate_token_budget=None,
+            gapfill_token_budget=None, provider="gpt5",
+        )
+
+
+def test_auth_env_keys_match_anthropic_provider() -> None:
+    from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+
+    assert AnthropicSDKProvider.auth_env_keys == cfg_mod.AUTH_ENV_KEYS
+    assert "FLOSSWING_PROVIDER" not in cfg_mod.AUTH_ENV_KEYS
