@@ -106,7 +106,7 @@ def run_and_score(
     """
     repo_root = (corpus_root / entry.repo).resolve()
     cfg = fcfg.resolve(
-        repo_root=repo_root, model=None,
+        repo_root=repo_root, model=None, provider=None,
         recon_token_budget=None, hunt_token_budget=None,
         validate_token_budget=None, gapfill_token_budget=None,
         dedupe_token_budget=None, trace_token_budget=None,
