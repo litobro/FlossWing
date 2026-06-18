@@ -388,6 +388,14 @@ work for any future LLM provider that speaks MCP.
 
 Heterogeneity between Hunt and Validate is deliberate — reduces correlated errors.
 
+**Model providers.** Model invocation goes through a `Provider` seam at
+`flosswing/agent/providers/` (`base.py` Protocol + shared `SessionResult`/`_classify`,
+`anthropic_sdk.py` default backend, `registry.py`). `run_session` resolves the provider
+selected by `--provider` / `FLOSSWING_PROVIDER` (default `anthropic`). `ollama`, `openai`,
+`bedrock`, and `cloudflare` are registered as unimplemented stubs — selecting one fails
+early at config resolution. Adding a real backend means implementing the `Provider`
+protocol and registering it; no pipeline stage changes.
+
 **Per-session token budget** enforced by the orchestrator. Default hard cap: 200k input
 tokens per Hunt session, 100k per Validate session. Configurable via `--token-budget`.
 When exceeded, session is killed and the task is marked `budget_exceeded`. Not a retry
@@ -516,7 +524,7 @@ logged. See
 - Sandbox: Docker (primary), Firejail (fallback)
 - Output: markdown report, JSON report, per-finding directories
 - Eval: corpus-based scoring with `flosswing eval`
-- BYO `ANTHROPIC_API_KEY`
+- Model-provider abstraction (Anthropic Agent SDK is the only working backend; BYO `ANTHROPIC_API_KEY`)
 
 **Deferred to v2:**
 
@@ -526,7 +534,6 @@ logged. See
 - Disclosure draft subcommand (`flosswing disclose`)
 - Diff mode (`flosswing diff <run_a> <run_b>` for re-scans after fixes)
 - Web UI / local server mode
-- Non-Anthropic model providers
 - Additional languages (Ruby, PHP, Kotlin, Swift, C#)
 - Plugin system for third-party attack classes
 
