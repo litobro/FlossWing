@@ -14,30 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Wrapper around claude-agent-sdk.
+"""Thin provider facade for agent sessions.
 
-Spawns the `claude` CLI subprocess via ClaudeAgentOptions, drives one
-session, returns a structured SessionResult. Outcome classification is
-factored out as _classify() for direct unit testing without mocking
-the entire SDK transport.
-
-Per docs/specs/2026-05-25-v0.2-recon-plumbing-design.md § Component
-responsibilities: no retry on refusal, best-effort token-budget
-enforcement (may overshoot by one round).
-
-SDK shape notes (verified against installed claude-agent-sdk):
-- `ClaudeAgentOptions.mcp_servers` is a dict of name->config, where the
-  config for in-process Python tools is an `McpSdkServerConfig` built
-  via `create_sdk_mcp_server(name, tools=[...])`. We accept the raw
-  list returned by `tool_registry.build_recon_tools(...)` and wrap it.
-- `query()` yields `UserMessage | AssistantMessage | SystemMessage |
-  ResultMessage | StreamEvent | RateLimitEvent`. `ResultMessage` carries
-  the terminal fields we care about: `stop_reason`, `usage`, `is_error`,
-  `subtype`, `errors`, `result`. `subtype` distinguishes the SDK's
-  spurious-error case (`is_error=True`, `subtype="success"`) from real
-  errors (`error_max_turns`, `error_during_execution`) — see
-  `_api_error_from_result`. `AssistantMessage` carries per-turn `usage`
-  and `stop_reason` which we also harvest as a fallback / running tally.
+Resolves the requested provider (default ``"anthropic"``) from the
+registry and delegates to its ``run_session`` implementation. Session
+logic, auth validation, and SDK interaction live in the provider module
+(e.g. ``flosswing/agent/providers/anthropic_sdk.py``).
 """
 
 from __future__ import annotations

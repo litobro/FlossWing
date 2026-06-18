@@ -77,6 +77,42 @@ def test_api_error_from_result_real_error_propagates() -> None:
     assert msg == "boom"
 
 
+def test_api_error_from_result_spurious_success_ignores_errors_list() -> None:
+    """Even when ``errors`` is populated (e.g. ["http_429"]), the success
+    subtype takes precedence — the session itself succeeded."""
+    assert a._api_error_from_result(
+        is_error=True, subtype="success", errors=["http_429"]
+    ) is None
+
+
+def test_api_error_from_result_max_turns_sentinel() -> None:
+    """``error_max_turns`` with no errors list returns the structured sentinel
+    string ``result_is_error:<subtype>`` — this is the critical untested
+    branch of the ``or f"result_is_error:{subtype}"`` fallback."""
+    assert a._api_error_from_result(
+        is_error=True, subtype="error_max_turns", errors=None
+    ) == "result_is_error:error_max_turns"
+
+
+def test_api_error_from_result_prefers_errors_list_over_sentinel() -> None:
+    """When the SDK populates ``errors``, that's strictly more informative
+    than the generic ``result_is_error:<subtype>`` sentinel — use it."""
+    assert a._api_error_from_result(
+        is_error=True,
+        subtype="error_during_execution",
+        errors=["upstream timed out after 60s"],
+    ) == "upstream timed out after 60s"
+
+
+def test_api_error_from_result_joins_multiple_errors() -> None:
+    """Multiple entries in ``errors`` are semicolon-joined, preserving order."""
+    assert a._api_error_from_result(
+        is_error=True,
+        subtype="error_during_execution",
+        errors=["err one", "err two"],
+    ) == "err one; err two"
+
+
 def test_is_spurious_sdk_exit_error_anchors_full_string() -> None:
     assert a._is_spurious_sdk_exit_error(
         RuntimeError("Claude Code returned an error result: success")
