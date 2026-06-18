@@ -1163,3 +1163,17 @@ def test_orchestrator_persists_gapfill_token_budget_in_config_json(
         payload = _json.loads(row.config_json)
         assert "gapfill_token_budget" in payload
         assert payload["gapfill_token_budget"] == 1_000_000
+
+
+def test_config_for_run_row_persists_provider(tmp_path: Path) -> None:
+    """The selected model provider must be recorded in the run's config_json
+    audit record. Uses a non-default provider value to prove the serializer
+    reads cfg.provider rather than hard-coding 'anthropic'."""
+    import json as _json
+    from dataclasses import replace
+
+    from flosswing.orchestrator import _config_for_run_row
+
+    cfg = replace(_cfg(tmp_path), provider="bedrock")
+    payload = _json.loads(_config_for_run_row(cfg))
+    assert payload["provider"] == "bedrock"

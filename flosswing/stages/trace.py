@@ -514,6 +514,7 @@ async def run(
         try:
             session_result = await run_session(
                 model=cfg.model,
+                provider=cfg.provider,
                 system_prompt=system_prompt,
                 tools=tools,
                 user_prompt=user_prompt,

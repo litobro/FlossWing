@@ -47,12 +47,12 @@ backward-compat alias for the old `token_budget` name.
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from flosswing.errors import AuthCredentialMissingError
+from flosswing.agent.providers import registry
+from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+from flosswing.errors import ProviderNotImplementedError
 
 DEFAULT_MODEL: str = "claude-opus-4-7"
 DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
@@ -66,46 +66,15 @@ DEFAULT_AUTO_RENDER: bool = True
 DEFAULT_OUTPUT_FORMATS: tuple[str, ...] = ("md", "json")
 DEFAULT_OUTPUT_DIR: Path | None = None
 
-# Direct Anthropic API: just the key.
-_DIRECT_KEYS: tuple[str, ...] = ("ANTHROPIC_API_KEY",)
+DEFAULT_PROVIDER: str = "anthropic"
+PROVIDER_ENV_VAR: str = "FLOSSWING_PROVIDER"
 
-# Foundry routing: enables Foundry mode + names the resource the CLI hits.
-_FOUNDRY_ROUTING_KEYS: tuple[str, ...] = (
-    "CLAUDE_CODE_USE_FOUNDRY",
-    "ANTHROPIC_FOUNDRY_RESOURCE",
-)
-
-# Foundry auth: one of these auth backends, OR an active az-login session.
-_FOUNDRY_API_KEY: str = "ANTHROPIC_FOUNDRY_API_KEY"
-_ENTRA_SP_KEYS: tuple[str, ...] = (
-    "AZURE_CLIENT_ID",
-    "AZURE_TENANT_ID",
-    "AZURE_CLIENT_SECRET",
-)
-
-# Foundry deployment names per model role. Claude Code uses these to know
-# which deployment to call when the agent asks for `claude-opus-X`, etc.
-_FOUNDRY_MODEL_KEYS: tuple[str, ...] = (
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-)
-
-# Every auth/routing/model variable FlossWing reads from the environment. The
-# default `.env` auto-load (flosswing/cli.py) is restricted to this allowlist so
-# a stray `.env` — e.g. one planted in an untrusted target repo the operator
-# happens to run from — cannot inject arbitrary environment variables (proxies,
-# PYTHONPATH, etc.). An explicit `--env-file PATH` bypasses the restriction
-# (that is the operator deliberately trusting a specific file).
-AUTH_ENV_KEYS: frozenset[str] = frozenset(
-    (
-        *_DIRECT_KEYS,
-        *_FOUNDRY_ROUTING_KEYS,
-        _FOUNDRY_API_KEY,
-        *_ENTRA_SP_KEYS,
-        *_FOUNDRY_MODEL_KEYS,
-    )
-)
+# The default `.env` auto-load (flosswing/cli.py) is restricted to this
+# allowlist. Derived from the Anthropic provider's declared keys so a future
+# real provider extends it just by declaring auth_env_keys. FLOSSWING_PROVIDER
+# is intentionally NOT here: provider selection is not a credential and must
+# not be settable by an auto-loaded .env.
+AUTH_ENV_KEYS: frozenset[str] = AnthropicSDKProvider.auth_env_keys
 
 
 @dataclass(frozen=True)
@@ -117,6 +86,7 @@ class Config:
     validate_token_budget: int
     gapfill_token_budget: int
     auth_env: dict[str, str] = field(default_factory=dict)
+    provider: str = DEFAULT_PROVIDER
     dedupe_token_budget: int = DEFAULT_DEDUPE_TOKEN_BUDGET
     trace_token_budget: int = DEFAULT_TRACE_TOKEN_BUDGET
     trace_max_depth: int = DEFAULT_TRACE_MAX_DEPTH
@@ -125,31 +95,6 @@ class Config:
         default_factory=lambda: list(DEFAULT_OUTPUT_FORMATS)
     )
     output_dir: Path | None = DEFAULT_OUTPUT_DIR
-
-
-def _collect_present(keys: tuple[str, ...]) -> dict[str, str]:
-    return {k: os.environ[k] for k in keys if k in os.environ}
-
-
-def _has_az_session() -> bool:
-    """Return True iff `az account show` succeeds (== plain az-login is active).
-
-    Used as the third Foundry-auth path (after API key, after SP triple).
-    Probed only when neither of those is set; the subprocess call is
-    bounded by a 5-second timeout.
-    """
-    if shutil.which("az") is None:
-        return False
-    try:
-        r = subprocess.run(
-            ["az", "account", "show"],
-            check=False,
-            capture_output=True,
-            timeout=5,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    return r.returncode == 0
 
 
 def resolve(
@@ -166,47 +111,19 @@ def resolve(
     auto_render: bool | None = None,
     output_formats: list[str] | None = None,
     output_dir: Path | None = None,
+    provider: str | None = None,
 ) -> Config:
     """Build a Config from CLI flags + env. Raises if no auth path."""
-    auth_env: dict[str, str] = {}
-    auth_env.update(_collect_present(_DIRECT_KEYS))
-    auth_env.update(_collect_present(_FOUNDRY_ROUTING_KEYS))
-    if _FOUNDRY_API_KEY in os.environ:
-        auth_env[_FOUNDRY_API_KEY] = os.environ[_FOUNDRY_API_KEY]
-    auth_env.update(_collect_present(_ENTRA_SP_KEYS))
-    auth_env.update(_collect_present(_FOUNDRY_MODEL_KEYS))
-
-    has_direct = "ANTHROPIC_API_KEY" in auth_env
-
-    foundry_routing_enabled = (
-        auth_env.get("CLAUDE_CODE_USE_FOUNDRY") == "1"
-        and "ANTHROPIC_FOUNDRY_RESOURCE" in auth_env
-    )
-    has_foundry_key = _FOUNDRY_API_KEY in auth_env
-    has_entra_sp = all(k in auth_env for k in _ENTRA_SP_KEYS)
-    # Only probe az session when no env-vars cover it (avoids a subprocess
-    # call on the happy direct/Foundry-key paths).
-    has_az_login = (
-        foundry_routing_enabled
-        and not has_foundry_key
-        and not has_entra_sp
-        and _has_az_session()
-    )
-    has_foundry = foundry_routing_enabled and (
-        has_foundry_key or has_entra_sp or has_az_login
-    )
-
-    if not (has_direct or has_foundry):
-        raise AuthCredentialMissingError(
-            "No auth credential found. Set one of:\n"
-            "  - ANTHROPIC_API_KEY (direct Anthropic API), OR\n"
-            "  - Foundry routing: CLAUDE_CODE_USE_FOUNDRY=1 +\n"
-            "    ANTHROPIC_FOUNDRY_RESOURCE=<name>, plus one of:\n"
-            "      ANTHROPIC_FOUNDRY_API_KEY=<key>, OR\n"
-            "      an active az-login session, OR\n"
-            "      AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_CLIENT_SECRET\n"
-            "      (Entra ID service principal)."
+    provider_name = provider or os.environ.get(PROVIDER_ENV_VAR) or DEFAULT_PROVIDER
+    prov = registry.get_provider(provider_name)  # UnknownProviderError if bogus
+    if not registry.is_implemented(provider_name):
+        raise ProviderNotImplementedError(
+            f"{provider_name} provider is not yet implemented; see ARCHITECTURE.md"
         )
+    prov.validate_auth(os.environ)  # AuthCredentialMissingError if no usable path
+    auth_env: dict[str, str] = {
+        k: os.environ[k] for k in prov.auth_env_keys if k in os.environ
+    }
 
     return Config(
         repo_root=repo_root,
@@ -232,6 +149,7 @@ def resolve(
             else DEFAULT_GAPFILL_TOKEN_BUDGET
         ),
         auth_env=auth_env,
+        provider=provider_name,
         dedupe_token_budget=(
             dedupe_token_budget
             if dedupe_token_budget is not None

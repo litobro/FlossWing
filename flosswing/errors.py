@@ -118,6 +118,16 @@ class AuthCredentialMissingError(FlosswingError):
     retryable = False
 
 
+class UnknownProviderError(FlosswingError):
+    code = "unknown_provider"
+    retryable = False
+
+
+class ProviderNotImplementedError(FlosswingError):
+    code = "provider_not_implemented"
+    retryable = False
+
+
 class InvalidAttackClassError(FlosswingError):
     code = "invalid_attack_class"
     retryable = False

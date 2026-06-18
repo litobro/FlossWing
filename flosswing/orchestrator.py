@@ -90,6 +90,7 @@ def _config_for_run_row(cfg: Config) -> str:
     payload = {
         "repo_root": str(cfg.repo_root),
         "model": cfg.model,
+        "provider": cfg.provider,
         "recon_token_budget": cfg.recon_token_budget,
         "hunt_token_budget": cfg.hunt_token_budget,
         "validate_token_budget": cfg.validate_token_budget,

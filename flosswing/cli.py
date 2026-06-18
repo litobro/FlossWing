@@ -112,6 +112,11 @@ def main(env_file: str | None, no_env_file: bool) -> None:
     help="Override the agent model (default claude-opus-4-7).",
 )
 @click.option(
+    "--provider",
+    default=None,
+    help="Model provider backend (default anthropic). Others are reserved/unimplemented.",
+)
+@click.option(
     "--recon-token-budget",
     type=int,
     default=None,
@@ -173,6 +178,7 @@ def main(env_file: str | None, no_env_file: bool) -> None:
 def scan(
     path: str,
     model: str | None,
+    provider: str | None,
     recon_token_budget: int | None,
     hunt_token_budget: int | None,
     validate_token_budget: int | None,
@@ -189,6 +195,7 @@ def scan(
         cfg = fcfg.resolve(
             repo_root=Path(path),
             model=model,
+            provider=provider,
             recon_token_budget=recon_token_budget,
             hunt_token_budget=hunt_token_budget,
             validate_token_budget=validate_token_budget,
