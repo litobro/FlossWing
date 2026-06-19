@@ -127,7 +127,9 @@ class Provider(Protocol):
     name: str
     auth_env_keys: frozenset[str]
 
-    def validate_auth(self, env: Mapping[str, str]) -> None: ...
+    def validate_auth(
+        self, env: Mapping[str, str], *, model: str | None = None
+    ) -> None: ...
 
     async def run_session(
         self,

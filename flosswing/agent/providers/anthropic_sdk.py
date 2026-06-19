@@ -192,11 +192,16 @@ class AnthropicSDKProvider:
     name = "anthropic"
     auth_env_keys = _AUTH_ENV_KEYS
 
-    def validate_auth(self, env: Mapping[str, str]) -> None:
+    def validate_auth(
+        self, env: Mapping[str, str], *, model: str | None = None
+    ) -> None:
         """Raise AuthCredentialMissingError unless a usable auth path exists.
 
-        Same logic previously inlined in config.resolve().
+        Same logic previously inlined in config.resolve(). `model` is
+        accepted for Provider-Protocol parity with the Ollama backend
+        (which preflights model availability) and is unused here.
         """
+        del model
         has_direct = "ANTHROPIC_API_KEY" in env
         foundry_routing_enabled = (
             env.get("CLAUDE_CODE_USE_FOUNDRY") == "1"

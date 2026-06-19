@@ -38,7 +38,10 @@ class UnimplementedProvider:
         self.name = name
         self.auth_env_keys: frozenset[str] = frozenset()
 
-    def validate_auth(self, env: Any) -> None:  # no-op by design
+    def validate_auth(
+        self, env: Any, *, model: str | None = None
+    ) -> None:  # no-op by design
+        del model
         return None
 
     async def run_session(self, **_kwargs: Any) -> SessionResult:

@@ -120,3 +120,10 @@ def test_is_spurious_sdk_exit_error_anchors_full_string() -> None:
     assert not a._is_spurious_sdk_exit_error(
         RuntimeError("returned an error result: success")
     )
+
+
+def test_validate_auth_accepts_model_kwarg() -> None:
+    # The model kwarg was added for the Ollama preflight; Anthropic ignores it.
+    prov = a.AnthropicSDKProvider()
+    prov.validate_auth({"ANTHROPIC_API_KEY": "sk-ant"}, model="claude-opus-4-7")
+    # No raise == pass; also callable positionally-env, kw-model.
