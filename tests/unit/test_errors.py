@@ -30,3 +30,13 @@ def test_provider_error_types_are_flosswing_errors() -> None:
     assert ProviderNotImplementedError("x").code == "provider_not_implemented"
     assert UnknownProviderError("x").retryable is False
     assert ProviderNotImplementedError("x").retryable is False
+
+
+def test_ollama_backend_unavailable_is_flosswing_error() -> None:
+    from flosswing.errors import FlosswingError, OllamaBackendUnavailableError
+
+    err = OllamaBackendUnavailableError("ollama not reachable at default host")
+    assert isinstance(err, FlosswingError)
+    assert err.code == "ollama_backend_unavailable"
+    assert err.retryable is False
+    assert err.message == "ollama not reachable at default host"

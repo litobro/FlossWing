@@ -128,6 +128,21 @@ class ProviderNotImplementedError(FlosswingError):
     retryable = False
 
 
+class OllamaBackendUnavailableError(FlosswingError):
+    """The Ollama backend could not be used at preflight or mid-session.
+
+    Raised by OllamaProvider.validate_auth when the Ollama server is
+    unreachable at the configured host, or when the requested model is
+    not pulled. Subclasses FlosswingError so the CLI's `except
+    FlosswingError` maps it to a clean exit 2. Ollama has no credentials,
+    so the message carries only host/model info (still run through
+    errors.scrub() defensively at the raise site).
+    """
+
+    code = "ollama_backend_unavailable"
+    retryable = False
+
+
 class InvalidAttackClassError(FlosswingError):
     code = "invalid_attack_class"
     retryable = False
