@@ -37,14 +37,14 @@ no Anthropic credentials present.
    on model output is rejected. The provider never returns `refused`; refusal
    detection stays an Anthropic-only capability.
 5. **Ollama-specific default model.** When `provider == ollama` and no `--model`
-   is given, use `DEFAULT_OLLAMA_MODEL` (`gemma4`); the preflight model-check
+   is given, use `DEFAULT_OLLAMA_MODEL` (`gpt-oss:20b`); the preflight model-check
    then emits a friendly `ollama pull …` message if it is absent.
 
 ### Model requirement: tool/function calling
 
 The native loop *is* the model emitting structured `tool_calls`. A model that
 does not support Ollama function-calling cannot invoke any FlossWing tool, so
-the pipeline would run but accomplish nothing. The chosen default (`gemma4`)
+the pipeline would run but accomplish nothing. The chosen default (`gpt-oss:20b`)
 supports tool calling (operator-confirmed, 2026-06-18). Any operator-supplied
 `--model` MUST likewise be a tool-calling-capable build; the gated integration
 test / manual runbook is where a wrongly-chosen non-tool model would surface as
@@ -165,7 +165,7 @@ These modify the Provider abstraction introduced in #32. None of them touch
   `FLOSSWING_PROVIDER`, and `--model` / its default.
 - `OLLAMA_HOST` (optional) selects a non-default host; honored by the `ollama`
   client and `.env`-loadable via the widened allowlist.
-- New constant `DEFAULT_OLLAMA_MODEL = "gemma4"` in `config.py`.
+- New constant `DEFAULT_OLLAMA_MODEL = "gpt-oss:20b"` in `config.py`.
 - Wall-clock-deadline and max-iteration constants live in `ollama_native.py`.
 
 ## Error handling & security
@@ -198,7 +198,7 @@ These modify the Provider abstraction introduced in #32. None of them touch
   repo, running a single stage. Not in normal CI (mirrors the existing
   `FLOSSWING_INTEGRATION` discipline).
 - **Manual end-to-end runbook** — the acceptance check:
-  1. `ollama pull gemma4`
+  1. `ollama pull gpt-oss:20b`
   2. `flosswing scan tests/corpus/<repo> --provider ollama`
   3. confirm a report is produced.
 

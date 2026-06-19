@@ -54,7 +54,7 @@ from flosswing.agent.providers import registry
 from flosswing.errors import ProviderNotImplementedError
 
 DEFAULT_MODEL: str = "claude-opus-4-7"
-DEFAULT_OLLAMA_MODEL: str = "gemma4"
+DEFAULT_OLLAMA_MODEL: str = "gpt-oss:20b"
 DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
 DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
 DEFAULT_VALIDATE_TOKEN_BUDGET: int = 100_000

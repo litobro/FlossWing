@@ -1,7 +1,7 @@
 """Gated real-Ollama integration smoke test.
 
 Runs only when FLOSSWING_OLLAMA_INTEGRATION=1 and a local Ollama server is
-serving a tool-calling model (default gemma4, override with
+serving a tool-calling model (default gpt-oss:20b, override with
 FLOSSWING_OLLAMA_MODEL). Not part of normal CI — mirrors the
 FLOSSWING_INTEGRATION discipline. Verifies the native loop completes a
 single tool round-trip end-to-end.
@@ -39,7 +39,7 @@ async def test_ollama_round_trip_completes() -> None:
             calls.append(args)
             return {"content": [{"type": "text", "text": f"echoed: {args.get('text')}"}]}
 
-    model = os.environ.get("FLOSSWING_OLLAMA_MODEL", "gemma4")
+    model = os.environ.get("FLOSSWING_OLLAMA_MODEL", "gpt-oss:20b")
     prov = OllamaProvider()
     prov.validate_auth(dict(os.environ), model=model)
 

@@ -109,7 +109,7 @@ def main(env_file: str | None, no_env_file: bool) -> None:
 @click.option(
     "--model",
     default=None,
-    help="Override the agent model (default claude-opus-4-7; gemma4 for --provider ollama).",
+    help="Override the agent model (default claude-opus-4-7; gpt-oss:20b for --provider ollama).",
 )
 @click.option(
     "--provider",

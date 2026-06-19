@@ -616,7 +616,7 @@ def test_auth_env_keys_is_union_of_implemented_providers() -> None:
     assert "FLOSSWING_PROVIDER" not in cfg_mod.AUTH_ENV_KEYS
 
 
-def test_ollama_provider_defaults_model_to_gemma4(
+def test_ollama_provider_defaults_model_to_gpt_oss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _strip_all_auth(monkeypatch)
@@ -634,8 +634,8 @@ def test_ollama_provider_defaults_model_to_gemma4(
         gapfill_token_budget=None, provider="ollama",
     )
     assert cfg.provider == "ollama"
-    assert cfg.model == "gemma4"
-    assert seen["model"] == "gemma4"  # preflight saw the resolved model
+    assert cfg.model == "gpt-oss:20b"
+    assert seen["model"] == "gpt-oss:20b"  # preflight saw the resolved model
 
 
 def test_ollama_provider_respects_explicit_model(
