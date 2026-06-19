@@ -664,7 +664,7 @@ class _RaisingAsyncClient:
         raise self._exc
 
 
-def _async_factory(client: Any):  # type: ignore[no-untyped-def]
+def _async_factory(client: Any):  # type: ignore[no-untyped-def]  # returns an untyped client-factory closure for tests
     def factory(host: Any = None) -> Any:
         return client
     return factory
@@ -687,7 +687,7 @@ def _run(prov: on.OllamaProvider, **kw: Any) -> on.SessionResult:
         token_budget=200_000, auth_env={}, run_id="r", stage="hunt",
     )
     base.update(kw)
-    return asyncio.run(prov.run_session(**base))  # type: ignore[arg-type]
+    return asyncio.run(prov.run_session(**base))  # type: ignore[arg-type]  # **base is a heterogeneous dict; kwargs types are exercised at runtime
 
 
 # --- run_session tests -------------------------------------------------------
@@ -991,8 +991,8 @@ Expected: PASS (all preflight, helper, and run_session tests)
 Run: `.venv/bin/ruff check flosswing/agent/providers/ollama_native.py tests/unit/test_providers_ollama.py`
 Expected: `All checks passed!` (no unused imports, no lines >100 chars — wrap any the linter flags)
 
-Run: `.venv/bin/mypy flosswing/agent/providers/ollama_native.py`
-Expected: `Success: no issues found`
+Run: `.venv/bin/mypy flosswing/agent/providers/ollama_native.py tests/unit/test_providers_ollama.py`
+Expected: `Success: no issues found` (both the module and the test file are type-checked)
 
 - [ ] **Step 5: Commit**
 
