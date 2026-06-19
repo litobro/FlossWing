@@ -452,6 +452,33 @@ def test_run_session_iteration_cap_errors(monkeypatch: pytest.MonkeyPatch) -> No
     assert client.count == 2
 
 
+def test_env_override_reads_positive_value_else_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("X_CAP", raising=False)
+    assert on._env_override("X_CAP", 50, int) == 50  # missing -> default
+    monkeypatch.setenv("X_CAP", "150")
+    assert on._env_override("X_CAP", 50, int) == 150  # override applied
+    monkeypatch.setenv("X_CAP", "nope")
+    assert on._env_override("X_CAP", 50, int) == 50  # non-numeric -> default
+    monkeypatch.setenv("X_CAP", "0")
+    assert on._env_override("X_CAP", 50, int) == 50  # non-positive -> default
+
+
+def test_run_session_iteration_cap_honors_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The env override raises the cap above the module default for real repos.
+    monkeypatch.setattr(on, "_MAX_TOOL_ITERATIONS", 2)
+    monkeypatch.setenv(on._MAX_TOOL_ITERATIONS_ENV, "4")
+    client = _LoopingAsyncClient()
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    tool = _FakeTool("grep", {"content": [{"type": "text", "text": "again"}]})
+    res = _run(on.OllamaProvider(), tools=[tool])
+    assert res.outcome == "errored"
+    assert client.count == 4  # env value (4) wins over the module default (2)
+
+
 def test_run_session_client_error_is_errored_and_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _RaisingAsyncClient(RuntimeError("boom Authorization: Bearer eyJabc.def.ghi"))
     monkeypatch.setattr(on, "AsyncClient", _async_factory(client))

@@ -28,9 +28,10 @@ docs/specs/2026-06-18-ollama-provider-design.md.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypeVar
 
 from ollama import AsyncClient, Client
 
@@ -38,10 +39,32 @@ from flosswing.agent.providers.base import SessionResult as SessionResult
 from flosswing.agent.providers.base import _classify
 from flosswing.errors import OllamaBackendUnavailableError, scrub
 
-# Safety guards for the native loop (the SDK normally provides these).
-# Generous because local inference is slow; both are tunable here.
+# Safety guards for the native loop (the SDK normally provides these). The
+# defaults suit small repos; real repos can need more exploration before the
+# model converges, so each is overridable via an env var (the Anthropic path's
+# loop is the SDK's, so these are intentionally Ollama-local).
 _MAX_TOOL_ITERATIONS: int = 50
 _WALL_CLOCK_DEADLINE_S: float = 1800.0  # 30 minutes per session
+_MAX_TOOL_ITERATIONS_ENV: str = "FLOSSWING_OLLAMA_MAX_TOOL_ITERATIONS"
+_WALL_CLOCK_DEADLINE_ENV: str = "FLOSSWING_OLLAMA_DEADLINE_S"
+
+_T = TypeVar("_T", int, float)
+
+
+def _env_override(name: str, default: _T, cast: type[_T]) -> _T:
+    """Read a positive numeric override from the environment, else the default.
+
+    A missing, non-numeric, or non-positive value falls back to ``default`` so a
+    typo can't silently disable a guard.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = cast(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 # Bound on the preflight reachability probe. The ollama client otherwise has
 # no timeout (httpx Timeout=None), so a host that accepts the connection but
@@ -227,8 +250,14 @@ class OllamaProvider:
             {"role": "user", "content": user_prompt},
         ]
 
+        max_iterations = _env_override(
+            _MAX_TOOL_ITERATIONS_ENV, _MAX_TOOL_ITERATIONS, int
+        )
+        deadline_s = _env_override(
+            _WALL_CLOCK_DEADLINE_ENV, _WALL_CLOCK_DEADLINE_S, float
+        )
         started = time.monotonic()
-        deadline = started + _WALL_CLOCK_DEADLINE_S
+        deadline = started + deadline_s
         input_tokens = 0
         output_tokens = 0
         tool_calls_count = 0
@@ -236,7 +265,7 @@ class OllamaProvider:
         timed_out = False
 
         try:
-            for _iteration in range(_MAX_TOOL_ITERATIONS):
+            for _iteration in range(max_iterations):
                 now = time.monotonic()
                 if now > deadline:
                     timed_out = True
