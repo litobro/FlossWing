@@ -22,9 +22,10 @@ from typing import Any
 
 from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
 from flosswing.agent.providers.base import Provider, SessionResult
+from flosswing.agent.providers.ollama_native import OllamaProvider
 from flosswing.errors import ProviderNotImplementedError, UnknownProviderError
 
-_STUB_NAMES: tuple[str, ...] = ("ollama", "openai", "bedrock", "cloudflare")
+_STUB_NAMES: tuple[str, ...] = ("openai", "bedrock", "cloudflare")
 
 
 class UnimplementedProvider:
@@ -50,7 +51,10 @@ class UnimplementedProvider:
         )
 
 
-_IMPLEMENTED: dict[str, Provider] = {"anthropic": AnthropicSDKProvider()}
+_IMPLEMENTED: dict[str, Provider] = {
+    "anthropic": AnthropicSDKProvider(),
+    "ollama": OllamaProvider(),
+}
 _STUBS: dict[str, Provider] = {n: UnimplementedProvider(n) for n in _STUB_NAMES}
 _REGISTRY: dict[str, Provider] = {**_IMPLEMENTED, **_STUBS}
 
@@ -71,3 +75,12 @@ def get_provider(name: str) -> Provider:
             f"Unknown provider {name!r}. Registered: "
             f"{', '.join(sorted(_REGISTRY))}."
         ) from None
+
+
+def implemented_providers() -> tuple[Provider, ...]:
+    """All providers with a working backend (not stubs).
+
+    Used by config to build the .env auto-load allowlist (AUTH_ENV_KEYS)
+    from the union of every implemented provider's declared auth keys.
+    """
+    return tuple(_IMPLEMENTED.values())

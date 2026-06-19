@@ -109,12 +109,15 @@ def main(env_file: str | None, no_env_file: bool) -> None:
 @click.option(
     "--model",
     default=None,
-    help="Override the agent model (default claude-opus-4-7).",
+    help="Override the agent model (default claude-opus-4-7; gemma4 for --provider ollama).",
 )
 @click.option(
     "--provider",
     default=None,
-    help="Model provider backend (default anthropic). Others are reserved/unimplemented.",
+    help=(
+        "Model provider backend: anthropic (default) or ollama. "
+        "openai/bedrock/cloudflare are reserved/unimplemented."
+    ),
 )
 @click.option(
     "--recon-token-budget",

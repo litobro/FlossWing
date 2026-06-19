@@ -584,7 +584,7 @@ def test_env_selects_provider_when_no_flag(
 ) -> None:
     _strip_all_auth(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    monkeypatch.setenv("FLOSSWING_PROVIDER", "ollama")
+    monkeypatch.setenv("FLOSSWING_PROVIDER", "openai")
     with pytest.raises(ProviderNotImplementedError):
         resolve(
             repo_root=tmp_path, model=None, recon_token_budget=None,
@@ -606,8 +606,50 @@ def test_unknown_provider_rejected(
         )
 
 
-def test_auth_env_keys_match_anthropic_provider() -> None:
+def test_auth_env_keys_is_union_of_implemented_providers() -> None:
     from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+    from flosswing.agent.providers.ollama_native import OllamaProvider
 
-    assert AnthropicSDKProvider.auth_env_keys == cfg_mod.AUTH_ENV_KEYS
+    assert AnthropicSDKProvider.auth_env_keys <= cfg_mod.AUTH_ENV_KEYS
+    assert OllamaProvider.auth_env_keys <= cfg_mod.AUTH_ENV_KEYS
+    assert "OLLAMA_HOST" in cfg_mod.AUTH_ENV_KEYS
     assert "FLOSSWING_PROVIDER" not in cfg_mod.AUTH_ENV_KEYS
+
+
+def test_ollama_provider_defaults_model_to_gemma4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    # Stub the Ollama preflight so resolve() doesn't need a live server.
+    from flosswing.agent.providers import ollama_native
+    seen: dict[str, object] = {}
+
+    def _fake_validate(self: object, env: object, *, model: object = None) -> None:
+        seen["model"] = model
+
+    monkeypatch.setattr(ollama_native.OllamaProvider, "validate_auth", _fake_validate)
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="ollama",
+    )
+    assert cfg.provider == "ollama"
+    assert cfg.model == "gemma4"
+    assert seen["model"] == "gemma4"  # preflight saw the resolved model
+
+
+def test_ollama_provider_respects_explicit_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    from flosswing.agent.providers import ollama_native
+    monkeypatch.setattr(
+        ollama_native.OllamaProvider, "validate_auth",
+        lambda self, env, *, model=None: None,
+    )
+    cfg = resolve(
+        repo_root=tmp_path, model="qwen2.5-coder:7b", recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="ollama",
+    )
+    assert cfg.model == "qwen2.5-coder:7b"

@@ -16,7 +16,7 @@ def test_anthropic_is_implemented_and_returned() -> None:
     assert isinstance(reg.get_provider("anthropic"), AnthropicSDKProvider)
 
 
-@pytest.mark.parametrize("name", ["ollama", "openai", "bedrock", "cloudflare"])
+@pytest.mark.parametrize("name", ["openai", "bedrock", "cloudflare"])
 def test_stubs_registered_but_not_implemented(name: str) -> None:
     assert name in reg.registered_names()
     assert reg.is_implemented(name) is False
@@ -31,7 +31,7 @@ def test_unknown_provider_raises_listing_names() -> None:
 
 
 def test_stub_run_session_raises() -> None:
-    prov = reg.get_provider("ollama")
+    prov = reg.get_provider("openai")
     with pytest.raises(ProviderNotImplementedError):
         asyncio.run(
             prov.run_session(
@@ -39,3 +39,15 @@ def test_stub_run_session_raises() -> None:
                 token_budget=1, auth_env={}, run_id="r", stage="hunt",
             )
         )
+
+
+def test_ollama_is_implemented() -> None:
+    from flosswing.agent.providers.ollama_native import OllamaProvider
+
+    assert reg.is_implemented("ollama") is True
+    assert isinstance(reg.get_provider("ollama"), OllamaProvider)
+
+
+def test_implemented_providers_includes_anthropic_and_ollama() -> None:
+    names = {p.name for p in reg.implemented_providers()}
+    assert {"anthropic", "ollama"} <= names

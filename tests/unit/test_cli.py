@@ -30,7 +30,7 @@ def test_scan_rejects_unimplemented_provider(monkeypatch, tmp_path) -> None:  # 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     runner = CliRunner()
     result = runner.invoke(
-        main, ["scan", str(tmp_path), "--provider", "ollama"]
+        main, ["scan", str(tmp_path), "--provider", "openai"]
     )
     assert result.exit_code == 2
     assert "not yet implemented" in result.output
