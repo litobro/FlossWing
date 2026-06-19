@@ -22,9 +22,10 @@ from typing import Any
 
 from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
 from flosswing.agent.providers.base import Provider, SessionResult
+from flosswing.agent.providers.ollama_native import OllamaProvider
 from flosswing.errors import ProviderNotImplementedError, UnknownProviderError
 
-_STUB_NAMES: tuple[str, ...] = ("ollama", "openai", "bedrock", "cloudflare")
+_STUB_NAMES: tuple[str, ...] = ("openai", "bedrock", "cloudflare")
 
 
 class UnimplementedProvider:
@@ -37,8 +38,14 @@ class UnimplementedProvider:
     def __init__(self, name: str) -> None:
         self.name = name
         self.auth_env_keys: frozenset[str] = frozenset()
+        # Never read: config.resolve() rejects stubs before model resolution.
+        # Present only for Provider-Protocol conformance.
+        self.default_model = ""
 
-    def validate_auth(self, env: Any) -> None:  # no-op by design
+    def validate_auth(
+        self, env: Any, *, model: str | None = None
+    ) -> None:  # no-op by design
+        del model
         return None
 
     async def run_session(self, **_kwargs: Any) -> SessionResult:
@@ -47,7 +54,10 @@ class UnimplementedProvider:
         )
 
 
-_IMPLEMENTED: dict[str, Provider] = {"anthropic": AnthropicSDKProvider()}
+_IMPLEMENTED: dict[str, Provider] = {
+    "anthropic": AnthropicSDKProvider(),
+    "ollama": OllamaProvider(),
+}
 _STUBS: dict[str, Provider] = {n: UnimplementedProvider(n) for n in _STUB_NAMES}
 _REGISTRY: dict[str, Provider] = {**_IMPLEMENTED, **_STUBS}
 
@@ -68,3 +78,12 @@ def get_provider(name: str) -> Provider:
             f"Unknown provider {name!r}. Registered: "
             f"{', '.join(sorted(_REGISTRY))}."
         ) from None
+
+
+def implemented_providers() -> tuple[Provider, ...]:
+    """All providers with a working backend (not stubs).
+
+    Used by config to build the .env auto-load allowlist (AUTH_ENV_KEYS)
+    from the union of every implemented provider's declared auth keys.
+    """
+    return tuple(_IMPLEMENTED.values())

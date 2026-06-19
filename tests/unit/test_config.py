@@ -584,7 +584,7 @@ def test_env_selects_provider_when_no_flag(
 ) -> None:
     _strip_all_auth(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    monkeypatch.setenv("FLOSSWING_PROVIDER", "ollama")
+    monkeypatch.setenv("FLOSSWING_PROVIDER", "openai")
     with pytest.raises(ProviderNotImplementedError):
         resolve(
             repo_root=tmp_path, model=None, recon_token_budget=None,
@@ -606,8 +606,80 @@ def test_unknown_provider_rejected(
         )
 
 
-def test_auth_env_keys_match_anthropic_provider() -> None:
+def test_auth_env_keys_is_union_of_implemented_providers() -> None:
     from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+    from flosswing.agent.providers.ollama_native import OllamaProvider
 
-    assert AnthropicSDKProvider.auth_env_keys == cfg_mod.AUTH_ENV_KEYS
+    assert AnthropicSDKProvider.auth_env_keys <= cfg_mod.AUTH_ENV_KEYS
+    assert OllamaProvider.auth_env_keys <= cfg_mod.AUTH_ENV_KEYS
+    assert "OLLAMA_HOST" in cfg_mod.AUTH_ENV_KEYS
     assert "FLOSSWING_PROVIDER" not in cfg_mod.AUTH_ENV_KEYS
+
+
+def test_ollama_provider_defaults_model_to_gpt_oss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    # Stub the Ollama preflight so resolve() doesn't need a live server.
+    from flosswing.agent.providers import ollama_native
+    seen: dict[str, object] = {}
+
+    def _fake_validate(self: object, env: object, *, model: object = None) -> None:
+        seen["model"] = model
+
+    monkeypatch.setattr(ollama_native.OllamaProvider, "validate_auth", _fake_validate)
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="ollama",
+    )
+    assert cfg.provider == "ollama"
+    assert cfg.model == "gpt-oss:20b"
+    assert seen["model"] == "gpt-oss:20b"  # preflight saw the resolved model
+
+
+def test_ollama_provider_respects_explicit_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    from flosswing.agent.providers import ollama_native
+    monkeypatch.setattr(
+        ollama_native.OllamaProvider, "validate_auth",
+        lambda self, env, *, model=None: None,
+    )
+    cfg = resolve(
+        repo_root=tmp_path, model="qwen2.5-coder:7b", recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="ollama",
+    )
+    assert cfg.model == "qwen2.5-coder:7b"
+
+
+def test_resolve_skips_preflight_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # preflight=False must NOT call validate_auth, so a read-only command (e.g.
+    # `flosswing report`) works even when the selected backend is unreachable.
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("FLOSSWING_PROVIDER", "ollama")
+    from flosswing.agent.providers import ollama_native
+
+    def _boom(self: object, env: object, *, model: object = None) -> None:
+        raise AssertionError("validate_auth must not run when preflight=False")
+
+    monkeypatch.setattr(ollama_native.OllamaProvider, "validate_auth", _boom)
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, preflight=False,
+    )
+    assert cfg.provider == "ollama"
+    assert cfg.model == "gpt-oss:20b"
+
+
+def test_default_model_constants_sourced_from_providers() -> None:
+    from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+    from flosswing.agent.providers.ollama_native import OllamaProvider
+
+    assert AnthropicSDKProvider.default_model == cfg_mod.DEFAULT_MODEL
+    assert OllamaProvider.default_model == cfg_mod.DEFAULT_OLLAMA_MODEL

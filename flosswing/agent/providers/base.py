@@ -56,17 +56,35 @@ def _classify(
     refusal_text: str | None,
     budget: int,
     api_error: str | None,
+    timed_out: bool = False,
 ) -> SessionResult:
     """Map terminal session state to a SessionResult.
 
     Pure function. Precedence matches the spec:
-    api_error > refusal > budget > completed.
+    timed_out > api_error > refusal > budget > completed.
+
+    `timed_out` is the provider-agnostic "ran out of wall-clock time" outcome;
+    a provider that bounds its own loop (e.g. the native Ollama loop) sets it so
+    the single classification path here owns the whole outcome taxonomy rather
+    than each provider hand-building a timed_out SessionResult.
     """
     input_tokens = int(usage.get("input_tokens", 0))
     output_tokens = int(usage.get("output_tokens", 0))
     cache_read = int(usage.get("cache_read_tokens", 0))
     cache_write = int(usage.get("cache_write_tokens", 0))
 
+    if timed_out:
+        return SessionResult(
+            outcome="timed_out",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            duration_ms=0,
+            tool_calls_count=0,
+            refusal_text=None,
+            error_text=None,
+        )
     if api_error:
         return SessionResult(
             outcome="errored",
@@ -126,8 +144,11 @@ class Provider(Protocol):
 
     name: str
     auth_env_keys: frozenset[str]
+    default_model: str
 
-    def validate_auth(self, env: Mapping[str, str]) -> None: ...
+    def validate_auth(
+        self, env: Mapping[str, str], *, model: str | None = None
+    ) -> None: ...
 
     async def run_session(
         self,

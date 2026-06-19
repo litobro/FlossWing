@@ -52,9 +52,13 @@ from pathlib import Path
 
 from flosswing.agent.providers import registry
 from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+from flosswing.agent.providers.ollama_native import OllamaProvider
 from flosswing.errors import ProviderNotImplementedError
 
-DEFAULT_MODEL: str = "claude-opus-4-7"
+# Per-provider default model lives on the provider class (single source of
+# truth); these module-level aliases preserve the names other code/tests use.
+DEFAULT_MODEL: str = AnthropicSDKProvider.default_model
+DEFAULT_OLLAMA_MODEL: str = OllamaProvider.default_model
 DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
 DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
 DEFAULT_VALIDATE_TOKEN_BUDGET: int = 100_000
@@ -70,11 +74,14 @@ DEFAULT_PROVIDER: str = "anthropic"
 PROVIDER_ENV_VAR: str = "FLOSSWING_PROVIDER"
 
 # The default `.env` auto-load (flosswing/cli.py) is restricted to this
-# allowlist. Derived from the Anthropic provider's declared keys so a future
-# real provider extends it just by declaring auth_env_keys. FLOSSWING_PROVIDER
-# is intentionally NOT here: provider selection is not a credential and must
-# not be settable by an auto-loaded .env.
-AUTH_ENV_KEYS: frozenset[str] = AnthropicSDKProvider.auth_env_keys
+# allowlist: the union of every implemented provider's declared auth keys
+# (Anthropic's credential set + Ollama's OLLAMA_HOST). A future real
+# provider extends it just by declaring auth_env_keys. FLOSSWING_PROVIDER is
+# intentionally NOT here: provider selection is not a credential and must not
+# be settable by an auto-loaded .env.
+AUTH_ENV_KEYS: frozenset[str] = frozenset().union(
+    *(p.auth_env_keys for p in registry.implemented_providers())
+)
 
 
 @dataclass(frozen=True)
@@ -112,22 +119,36 @@ def resolve(
     output_formats: list[str] | None = None,
     output_dir: Path | None = None,
     provider: str | None = None,
+    preflight: bool = True,
 ) -> Config:
-    """Build a Config from CLI flags + env. Raises if no auth path."""
+    """Build a Config from CLI flags + env. Raises if no auth path.
+
+    When ``preflight`` is False, the provider's ``validate_auth``
+    reachability/credential check is skipped. Read-only commands that never run
+    the model (e.g. ``flosswing report``) pass False so they don't require a
+    live backend — the Ollama preflight would otherwise ping the server and
+    fail offline when ``FLOSSWING_PROVIDER=ollama`` is set.
+    """
     provider_name = provider or os.environ.get(PROVIDER_ENV_VAR) or DEFAULT_PROVIDER
     prov = registry.get_provider(provider_name)  # UnknownProviderError if bogus
     if not registry.is_implemented(provider_name):
         raise ProviderNotImplementedError(
             f"{provider_name} provider is not yet implemented; see ARCHITECTURE.md"
         )
-    prov.validate_auth(os.environ)  # AuthCredentialMissingError if no usable path
+    # Resolve the model before preflight so providers that verify model
+    # availability (Ollama) can check the concrete model name. The default is a
+    # property of the selected provider, not a per-name special case here.
+    resolved_model = model or prov.default_model
+    if preflight:
+        # AuthCredentialMissingError / OllamaBackendUnavailableError if unusable.
+        prov.validate_auth(os.environ, model=resolved_model)
     auth_env: dict[str, str] = {
         k: os.environ[k] for k in prov.auth_env_keys if k in os.environ
     }
 
     return Config(
         repo_root=repo_root,
-        model=model or DEFAULT_MODEL,
+        model=resolved_model,
         recon_token_budget=(
             recon_token_budget
             if recon_token_budget is not None

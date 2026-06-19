@@ -109,12 +109,15 @@ def main(env_file: str | None, no_env_file: bool) -> None:
 @click.option(
     "--model",
     default=None,
-    help="Override the agent model (default claude-opus-4-7).",
+    help="Override the agent model (default claude-opus-4-7; gpt-oss:20b for --provider ollama).",
 )
 @click.option(
     "--provider",
     default=None,
-    help="Model provider backend (default anthropic). Others are reserved/unimplemented.",
+    help=(
+        "Model provider backend: anthropic (default) or ollama. "
+        "openai/bedrock/cloudflare are reserved/unimplemented."
+    ),
 )
 @click.option(
     "--recon-token-budget",
@@ -257,6 +260,9 @@ def report(run_id: str, format_: str, output_dir: str | None) -> None:
             auto_render=True,
             output_formats=formats,
             output_dir=resolved_output_dir,
+            # report only renders stored state; never reach for a live backend
+            # (an offline Ollama would otherwise fail the preflight here).
+            preflight=False,
         )
     except FlosswingError as e:
         click.echo(e.message, err=True)
