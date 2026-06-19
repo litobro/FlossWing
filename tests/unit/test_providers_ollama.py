@@ -87,6 +87,70 @@ def test_to_ollama_tool_non_dict_schema_falls_back_to_empty() -> None:
     assert spec["function"]["parameters"] == {}
 
 
+def test_normalize_schema_collapses_optional_anyof() -> None:
+    # Pydantic optional `int | None` -> anyOf with a null branch and NO scalar
+    # type; strict Ollama templates (gpt-oss) crash on that. Collapse to the
+    # non-null branch while preserving default/title.
+    schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "title": "Path"},
+            "start_line": {
+                "anyOf": [{"type": "integer"}, {"type": "null"}],
+                "default": None,
+                "title": "Start Line",
+            },
+        },
+        "required": ["path"],
+    }
+    out = on._normalize_schema(schema, schema.get("$defs", {}))
+    start = out["properties"]["start_line"]
+    assert start["type"] == "integer"
+    assert start["default"] is None
+    assert start["title"] == "Start Line"
+    assert "anyOf" not in start
+
+
+def test_normalize_schema_resolves_ref_and_drops_defs() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "entries": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/EntryPoint"},
+            },
+        },
+        "$defs": {
+            "EntryPoint": {
+                "type": "object",
+                "properties": {"symbol": {"type": "string"}},
+                "required": ["symbol"],
+            }
+        },
+    }
+    out = on._normalize_schema(schema, schema["$defs"])
+    assert "$defs" not in out  # inlined and dropped
+    item = out["properties"]["entries"]["items"]
+    assert item["type"] == "object"
+    assert item["properties"]["symbol"]["type"] == "string"
+    assert "$ref" not in repr(out)
+
+
+def test_normalize_schema_no_unrenderable_constructs_remain() -> None:
+    # Round-trip the real recon tool schemas: every property must end with a
+    # concrete scalar `type`, and no anyOf/$ref/$defs may survive.
+    import json
+    from pathlib import Path
+
+    from flosswing.agent import tool_registry as tr
+
+    ctx = tr.RegistryContext(repo_root=Path("."), run_id="t", budget_total=1)
+    blob = json.dumps([on._to_ollama_tool(t) for t in tr.build_recon_tools(ctx)])
+    assert "anyOf" not in blob
+    assert "$ref" not in blob
+    assert "$defs" not in blob
+
+
 def test_flatten_content_joins_text_blocks() -> None:
     raw = {"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}
     assert on._flatten_content(raw) == "a\nb"

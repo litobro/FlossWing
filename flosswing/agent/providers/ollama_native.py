@@ -52,15 +52,70 @@ _PREFLIGHT_TIMEOUT_S: float = 5.0
 _DEFAULT_HOST_LABEL: str = "default host (http://localhost:11434)"
 
 
+def _normalize_schema(schema: Any, defs: dict[str, Any]) -> Any:
+    """Flatten a JSON Schema into a form strict Ollama chat templates accept.
+
+    Some model templates (notably gpt-oss) index ``property.type[0]`` while
+    rendering the tool list and 500 on any property that lacks a scalar
+    ``type`` — exactly what Pydantic emits for optional fields
+    (``anyOf: [{type: X}, {type: null}]``) and nested models (``$ref``). This:
+
+    - resolves ``$ref`` against the schema's ``$defs``,
+    - collapses an ``anyOf``/``oneOf`` to its first non-null branch (the
+      optional/union case), merging sibling keys (``default``/``title``/
+      ``description``) onto it,
+    - recurses through ``properties`` and array ``items``,
+
+    so every property ends with a concrete ``type``. It is intentionally lossy
+    — it keeps the parts a tool-calling model needs (name, type, description,
+    enum) and drops only the structural indirection templates choke on.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        target = defs.get(ref.rsplit("/", 1)[-1], {})
+        siblings = {k: v for k, v in schema.items() if k != "$ref"}
+        return _normalize_schema({**target, **siblings}, defs)
+
+    for combiner in ("anyOf", "oneOf"):
+        options = schema.get(combiner)
+        if isinstance(options, list):
+            non_null = [
+                o
+                for o in options
+                if not (isinstance(o, dict) and o.get("type") == "null")
+            ]
+            chosen = non_null[0] if non_null else {"type": "string"}
+            siblings = {k: v for k, v in schema.items() if k not in (combiner, "$ref")}
+            return _normalize_schema({**chosen, **siblings}, defs)
+
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "$defs":
+            continue  # inlined via $ref resolution; drop from the output
+        if key == "properties" and isinstance(value, dict):
+            out[key] = {k: _normalize_schema(v, defs) for k, v in value.items()}
+        elif key == "items":
+            out[key] = _normalize_schema(value, defs)
+        else:
+            out[key] = value
+    return out
+
+
 def _to_ollama_tool(tool: Any) -> dict[str, Any]:
     """Convert one SdkMcpTool to Ollama's function-tool spec.
 
     The real FlossWing tools pass ``Model.model_json_schema()`` as
-    ``input_schema`` (already a JSON-Schema dict), used verbatim as
-    ``function.parameters``. A non-dict schema (e.g. a TypedDict type)
-    falls back to an empty object schema.
+    ``input_schema`` (already a JSON-Schema dict). It is normalized (see
+    ``_normalize_schema``) so strict model templates can render every property,
+    then used as ``function.parameters``. A non-dict schema (e.g. a TypedDict
+    type) falls back to an empty object schema.
     """
-    schema = tool.input_schema if isinstance(tool.input_schema, dict) else {}
+    raw = tool.input_schema if isinstance(tool.input_schema, dict) else {}
+    defs = raw.get("$defs", {}) if isinstance(raw, dict) else {}
+    schema = _normalize_schema(raw, defs)
     return {
         "type": "function",
         "function": {
