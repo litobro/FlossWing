@@ -37,6 +37,7 @@ Adding a top-level dependency requires asking the operator first. Current stack:
 - `docker` — sandbox primary backend
 - `tree-sitter` + per-language grammars — symbol index
 - `python-ulid` — IDs for all rows
+- `ollama` — local-model backend client (OllamaProvider native tool-use loop)
 - `tomli` (3.11+ stdlib `tomllib` preferred)
 
 Dev/test only:

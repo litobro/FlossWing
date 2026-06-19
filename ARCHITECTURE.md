@@ -391,9 +391,10 @@ Heterogeneity between Hunt and Validate is deliberate — reduces correlated err
 **Model providers.** Model invocation goes through a `Provider` seam at
 `flosswing/agent/providers/` (`base.py` Protocol + shared `SessionResult`/`_classify`,
 `anthropic_sdk.py` default backend, `registry.py`). `run_session` resolves the provider
-selected by `--provider` / `FLOSSWING_PROVIDER` (default `anthropic`). `ollama`, `openai`,
-`bedrock`, and `cloudflare` are registered as unimplemented stubs — selecting one fails
-early at config resolution. Adding a real backend means implementing the `Provider`
+selected by `--provider` / `FLOSSWING_PROVIDER` (default `anthropic`). `ollama` is an
+implemented v1 backend (native in-process tool-use loop against a local Ollama server).
+`openai`, `bedrock`, and `cloudflare` remain registered as unimplemented stubs — selecting
+one fails early at config resolution. Adding a real backend means implementing the `Provider`
 protocol and registering it; no pipeline stage changes.
 
 **Per-session token budget** enforced by the orchestrator. Default hard cap: 200k input
