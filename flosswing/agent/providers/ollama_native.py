@@ -27,11 +27,14 @@ docs/specs/2026-06-18-ollama-provider-design.md.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 from typing import Any
 
-from ollama import Client
+from ollama import AsyncClient, Client
 
+from flosswing.agent.providers.base import SessionResult as SessionResult
+from flosswing.agent.providers.base import _classify
 from flosswing.errors import OllamaBackendUnavailableError, scrub
 
 # Safety guards for the native loop (the SDK normally provides these).
@@ -123,3 +126,149 @@ class OllamaProvider:
             raise OllamaBackendUnavailableError(
                 scrub(f"model {model!r} not pulled; run: ollama pull {model}")
             )
+
+    async def run_session(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        tools: list[Any],
+        user_prompt: str,
+        token_budget: int,
+        auth_env: dict[str, str],
+        run_id: str,
+        stage: str,
+        task_id: str | None = None,
+        finding_id: str | None = None,
+        agent_session_id: str | None = None,
+    ) -> SessionResult:
+        """Drive one native tool-use loop against Ollama.
+
+        Converts each SdkMcpTool to an Ollama tool spec, calls the chat
+        endpoint, dispatches the model's tool_calls to the tool handlers,
+        and feeds results back until the model answers without calling a
+        tool (completed) or a guard trips (budget/timeout/iteration-cap).
+        The run_id/stage/task_id/finding_id/agent_session_id args are
+        accepted for stage-side call parity (matching the Anthropic
+        provider) and are not yet plumbed into per-session telemetry.
+        """
+        del run_id, stage, task_id, finding_id, agent_session_id
+
+        host = auth_env.get("OLLAMA_HOST") or None
+        client = AsyncClient(host=host)
+        tool_specs = [_to_ollama_tool(t) for t in tools]
+        handlers = {t.name: t.handler for t in tools}
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        started = time.monotonic()
+        deadline = started + _WALL_CLOCK_DEADLINE_S
+        input_tokens = 0
+        output_tokens = 0
+        tool_calls_count = 0
+        api_error: str | None = None
+        timed_out = False
+
+        try:
+            for _iteration in range(_MAX_TOOL_ITERATIONS):
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    break
+
+                response = await client.chat(
+                    model=model,
+                    messages=messages,
+                    tools=tool_specs or None,
+                )
+                input_tokens += int(response.prompt_eval_count or 0)
+                output_tokens += int(response.eval_count or 0)
+                msg = response.message
+
+                assistant_entry: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": msg.content or "",
+                }
+                if msg.tool_calls:
+                    assistant_entry["tool_calls"] = msg.tool_calls
+                messages.append(assistant_entry)
+
+                # Best-effort budget check: stop before doing more work once
+                # we've overshot. _classify then buckets this as
+                # budget_exceeded (input_tokens > budget).
+                if input_tokens > token_budget:
+                    break
+
+                tool_calls = msg.tool_calls or []
+                if not tool_calls:
+                    break  # final answer -> completed
+
+                for call in tool_calls:
+                    tool_calls_count += 1
+                    name = call.function.name
+                    args = dict(call.function.arguments or {})
+                    handler = handlers.get(name)
+                    if handler is None:
+                        messages.append({
+                            "role": "tool",
+                            "tool_name": name,
+                            "content": f"error: unknown tool {name!r}",
+                        })
+                        continue
+                    try:
+                        raw = await handler(args)
+                    except Exception as e:  # tool errors feed back to the model
+                        messages.append({
+                            "role": "tool",
+                            "tool_name": name,
+                            "content": scrub(
+                                f"tool {name} raised {type(e).__name__}: {e}"
+                            ),
+                        })
+                        continue
+                    messages.append({
+                        "role": "tool",
+                        "tool_name": name,
+                        "content": _flatten_content(raw),
+                    })
+            else:
+                # Loop exhausted range() without breaking -> stuck calling tools.
+                api_error = api_error or "max_tool_iterations_exceeded"
+        except Exception as e:  # any transport/model error -> errored
+            api_error = f"{type(e).__name__}: {e}"
+
+        duration_ms = int((time.monotonic() - started) * 1000)
+
+        if timed_out:
+            return SessionResult(
+                outcome="timed_out",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                duration_ms=duration_ms,
+                tool_calls_count=tool_calls_count,
+                refusal_text=None,
+                error_text=None,
+            )
+
+        classified = _classify(
+            stop_reason=None,
+            usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
+            refusal_text=None,
+            budget=token_budget,
+            api_error=api_error,
+        )
+        return SessionResult(
+            outcome=classified.outcome,
+            input_tokens=classified.input_tokens,
+            output_tokens=classified.output_tokens,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            duration_ms=duration_ms,
+            tool_calls_count=tool_calls_count,
+            refusal_text=None,
+            error_text=classified.error_text,
+        )

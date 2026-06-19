@@ -6,6 +6,7 @@ The ollama client is mocked at the package boundary (the module-level
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, ClassVar
 
 import pytest
@@ -129,3 +130,218 @@ def test_name_and_auth_env_keys() -> None:
     prov = on.OllamaProvider()
     assert prov.name == "ollama"
     assert prov.auth_env_keys == frozenset({"OLLAMA_HOST"})
+
+
+# --- run_session fakes -------------------------------------------------------
+
+class _FakeFunction:
+    def __init__(self, name: str, arguments: dict[str, Any]) -> None:
+        self.name = name
+        self.arguments = arguments
+
+
+class _FakeToolCall:
+    def __init__(self, name: str, arguments: dict[str, Any]) -> None:
+        self.function = _FakeFunction(name, arguments)
+
+
+class _FakeMessage:
+    def __init__(self, content: str = "", tool_calls: list[_FakeToolCall] | None = None) -> None:
+        self.role = "assistant"
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _FakeChatResponse:
+    def __init__(
+        self,
+        message: _FakeMessage,
+        prompt_eval_count: int = 0,
+        eval_count: int = 0,
+    ) -> None:
+        self.message = message
+        self.prompt_eval_count = prompt_eval_count
+        self.eval_count = eval_count
+
+
+class _ScriptedAsyncClient:
+    """Returns queued responses in order; records each chat() call."""
+
+    def __init__(self, responses: list[_FakeChatResponse], *, host: Any = None) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    async def chat(
+        self, *, model: str, messages: Any, tools: Any = None, **kw: Any
+    ) -> _FakeChatResponse:
+        self.calls.append({"model": model, "messages": list(messages), "tools": tools})
+        return self._responses.pop(0)
+
+
+class _LoopingAsyncClient:
+    """Always returns a tool-call response (drives the iteration cap)."""
+
+    def __init__(self, *, host: Any = None) -> None:
+        self.count = 0
+
+    async def chat(
+        self, *, model: str, messages: Any, tools: Any = None, **kw: Any
+    ) -> _FakeChatResponse:
+        self.count += 1
+        return _FakeChatResponse(
+            _FakeMessage(tool_calls=[_FakeToolCall("grep", {"pattern": "x"})]),
+            prompt_eval_count=1,
+            eval_count=1,
+        )
+
+
+class _RaisingAsyncClient:
+    def __init__(self, exc: Exception, *, host: Any = None) -> None:
+        self._exc = exc
+
+    async def chat(
+        self, *, model: str, messages: Any, tools: Any = None, **kw: Any
+    ) -> _FakeChatResponse:
+        raise self._exc
+
+
+def _async_factory(client: Any):  # type: ignore[no-untyped-def]  # returns an untyped client-factory closure for tests
+    def factory(host: Any = None) -> Any:
+        return client
+    return factory
+
+
+class _FakeTool:
+    def __init__(self, name: str, result: dict[str, Any]) -> None:
+        self.name = name
+        self.description = f"{name} tool"
+        self.input_schema = {"type": "object"}
+        self._result = result
+
+    async def handler(self, args: dict[str, Any]) -> dict[str, Any]:
+        return self._result
+
+
+def _run(prov: on.OllamaProvider, **kw: Any) -> on.SessionResult:
+    base = dict(
+        model="gemma4", system_prompt="sys", tools=[], user_prompt="go",
+        token_budget=200_000, auth_env={}, run_id="r", stage="hunt",
+    )
+    base.update(kw)
+    return asyncio.run(prov.run_session(**base))  # type: ignore[arg-type]  # **base is a heterogeneous dict; kwargs types are exercised at runtime
+
+
+# --- run_session tests -------------------------------------------------------
+
+def test_run_session_completes_with_no_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _ScriptedAsyncClient([
+        _FakeChatResponse(_FakeMessage(content="done"), prompt_eval_count=10, eval_count=3),
+    ])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    res = _run(on.OllamaProvider())
+    assert res.outcome == "completed"
+    assert res.input_tokens == 10
+    assert res.output_tokens == 3
+    assert res.tool_calls_count == 0
+    assert res.refusal_text is None
+    assert res.cache_read_tokens == 0
+    assert res.cache_write_tokens == 0
+
+
+def test_run_session_dispatches_tool_then_completes(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _ScriptedAsyncClient([
+        _FakeChatResponse(
+            _FakeMessage(tool_calls=[_FakeToolCall("grep", {"pattern": "x"})]),
+            prompt_eval_count=5, eval_count=2,
+        ),
+        _FakeChatResponse(_FakeMessage(content="final"), prompt_eval_count=4, eval_count=1),
+    ])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    tool = _FakeTool("grep", {"content": [{"type": "text", "text": "match"}]})
+    res = _run(on.OllamaProvider(), tools=[tool])
+    assert res.outcome == "completed"
+    assert res.tool_calls_count == 1
+    assert res.input_tokens == 9  # 5 + 4 accumulated
+    # The second chat call must include the tool result as a tool-role message.
+    second_call_messages = client.calls[1]["messages"]
+    assert any(
+        m.get("role") == "tool" and "match" in m.get("content", "")
+        for m in second_call_messages
+    )
+
+
+def test_run_session_propagates_tool_is_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _ScriptedAsyncClient([
+        _FakeChatResponse(_FakeMessage(tool_calls=[_FakeToolCall("grep", {})])),
+        _FakeChatResponse(_FakeMessage(content="ok")),
+    ])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    tool = _FakeTool("grep", {"content": [{"type": "text", "text": "bad"}], "is_error": True})
+    res = _run(on.OllamaProvider(), tools=[tool])
+    assert res.outcome == "completed"
+    tool_msgs = [m for m in client.calls[1]["messages"] if m.get("role") == "tool"]
+    assert tool_msgs and "[tool_error] bad" in tool_msgs[0]["content"]
+
+
+def test_run_session_recovers_from_unknown_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _ScriptedAsyncClient([
+        _FakeChatResponse(_FakeMessage(tool_calls=[_FakeToolCall("nope", {})])),
+        _FakeChatResponse(_FakeMessage(content="ok")),
+    ])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    res = _run(on.OllamaProvider(), tools=[])
+    assert res.outcome == "completed"
+    tool_msgs = [m for m in client.calls[1]["messages"] if m.get("role") == "tool"]
+    assert tool_msgs and "unknown tool" in tool_msgs[0]["content"]
+
+
+def test_run_session_budget_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _ScriptedAsyncClient([
+        _FakeChatResponse(
+            _FakeMessage(tool_calls=[_FakeToolCall("grep", {})]),
+            prompt_eval_count=999, eval_count=1,
+        ),
+    ])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    res = _run(on.OllamaProvider(), token_budget=100)
+    assert res.outcome == "budget_exceeded"
+
+
+def test_run_session_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(on, "_WALL_CLOCK_DEADLINE_S", -1.0)
+    client = _ScriptedAsyncClient([_FakeChatResponse(_FakeMessage(content="never"))])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    res = _run(on.OllamaProvider())
+    assert res.outcome == "timed_out"
+    assert res.tool_calls_count == 0
+
+
+def test_run_session_iteration_cap_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(on, "_MAX_TOOL_ITERATIONS", 2)
+    client = _LoopingAsyncClient()
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    tool = _FakeTool("grep", {"content": [{"type": "text", "text": "again"}]})
+    res = _run(on.OllamaProvider(), tools=[tool])
+    assert res.outcome == "errored"
+    assert "max_tool_iterations_exceeded" in (res.error_text or "")
+    assert client.count == 2
+
+
+def test_run_session_client_error_is_errored_and_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _RaisingAsyncClient(RuntimeError("boom Authorization: Bearer eyJabc.def.ghi"))
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    res = _run(on.OllamaProvider())
+    assert res.outcome == "errored"
+    assert "eyJabc.def.ghi" not in (res.error_text or "")
+    assert "[REDACTED]" in (res.error_text or "")
+
+
+def test_run_session_never_synthesizes_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Refusal-sounding prose with no tool calls must classify as completed.
+    client = _ScriptedAsyncClient([
+        _FakeChatResponse(_FakeMessage(content="I can't help with that."), prompt_eval_count=1),
+    ])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    res = _run(on.OllamaProvider())
+    assert res.outcome == "completed"
+    assert res.refusal_text is None
