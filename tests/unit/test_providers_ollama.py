@@ -465,6 +465,46 @@ def test_env_override_reads_positive_value_else_default(
     assert on._env_override("X_CAP", 50, int) == 50  # non-positive -> default
 
 
+def test_think_setting_parses_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(on._THINK_ENV, raising=False)
+    assert on._think_setting() is None  # default off
+    for level in ("low", "medium", "high"):
+        monkeypatch.setenv(on._THINK_ENV, level)
+        assert on._think_setting() == level
+    monkeypatch.setenv(on._THINK_ENV, "true")
+    assert on._think_setting() is True
+    monkeypatch.setenv(on._THINK_ENV, "off")
+    assert on._think_setting() is None  # unrecognized -> disabled
+
+
+class _CapClient:
+    """Captures the kwargs passed to chat() so think= can be asserted."""
+
+    def __init__(self, captured: dict[str, Any], *, host: Any = None) -> None:
+        self._captured = captured
+        self.host = host
+
+    async def chat(self, **kw: Any) -> _FakeChatResponse:
+        self._captured.update(kw)
+        return _FakeChatResponse(_FakeMessage(content="done"))
+
+
+def test_run_session_passes_think_to_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(on._THINK_ENV, "high")
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(_CapClient(captured)))
+    _run(on.OllamaProvider())
+    assert captured["think"] == "high"
+
+
+def test_run_session_think_default_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(on._THINK_ENV, raising=False)
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(_CapClient(captured)))
+    _run(on.OllamaProvider())
+    assert captured["think"] is None
+
+
 def test_run_session_iteration_cap_honors_env_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

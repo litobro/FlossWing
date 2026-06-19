@@ -31,7 +31,7 @@ import asyncio
 import os
 import time
 from collections.abc import Mapping
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from ollama import AsyncClient, Client
 
@@ -47,8 +47,33 @@ _MAX_TOOL_ITERATIONS: int = 50
 _WALL_CLOCK_DEADLINE_S: float = 1800.0  # 30 minutes per session
 _MAX_TOOL_ITERATIONS_ENV: str = "FLOSSWING_OLLAMA_MAX_TOOL_ITERATIONS"
 _WALL_CLOCK_DEADLINE_ENV: str = "FLOSSWING_OLLAMA_DEADLINE_S"
+_THINK_ENV: str = "FLOSSWING_OLLAMA_THINK"
 
 _T = TypeVar("_T", int, float)
+
+
+def _think_setting() -> bool | Literal["low", "medium", "high"] | None:
+    """Resolve the Ollama ``think`` (reasoning) setting from the environment.
+
+    Reasoning models (e.g. gpt-oss) plan markedly better with thinking enabled,
+    which helps them follow multi-step agentic protocols (deciding when to stop
+    exploring and synthesize) instead of mechanically calling tools. Off by
+    default — a non-reasoning model would reject it. Accepts ``low``/``medium``/
+    ``high`` (effort), ``true``/``1``/``on``/``yes`` (enable), else disabled.
+    """
+    raw = os.environ.get(_THINK_ENV)
+    if raw is None:
+        return None
+    val = raw.strip().lower()
+    if val == "low":
+        return "low"
+    if val == "medium":
+        return "medium"
+    if val == "high":
+        return "high"
+    if val in ("true", "1", "on", "yes"):
+        return True
+    return None
 
 
 def _env_override(name: str, default: _T, cast: type[_T]) -> _T:
@@ -256,6 +281,7 @@ class OllamaProvider:
         deadline_s = _env_override(
             _WALL_CLOCK_DEADLINE_ENV, _WALL_CLOCK_DEADLINE_S, float
         )
+        think = _think_setting()
         started = time.monotonic()
         deadline = started + deadline_s
         input_tokens = 0
@@ -281,6 +307,7 @@ class OllamaProvider:
                             model=model,
                             messages=messages,
                             tools=tool_specs or None,
+                            think=think,
                         ),
                         timeout=deadline - now,
                     )
