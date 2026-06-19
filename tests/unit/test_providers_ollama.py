@@ -41,7 +41,7 @@ class _FakeSyncClient:
         return _FakeListResponse(self._names)
 
 
-def _sync_client_factory(names: list[str] | None = None, exc: Exception | None = None):  # type: ignore[no-untyped-def]
+def _sync_client_factory(names: list[str] | None = None, exc: Exception | None = None):  # type: ignore[no-untyped-def]  # returns an untyped client-factory closure for tests
     def factory(host: Any = None) -> _FakeSyncClient:
         return _FakeSyncClient(names, exc, host=host)
     return factory
