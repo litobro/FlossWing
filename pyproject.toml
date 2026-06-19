@@ -31,6 +31,7 @@ dependencies = [
     "tree-sitter-typescript==0.23.2",
     "tree-sitter-java==0.23.5",
     "python-ulid",
+    "ollama",
     "textual>=8",
 ]
 
