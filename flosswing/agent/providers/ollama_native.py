@@ -27,6 +27,7 @@ docs/specs/2026-06-18-ollama-provider-design.md.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -41,6 +42,12 @@ from flosswing.errors import OllamaBackendUnavailableError, scrub
 # Generous because local inference is slow; both are tunable here.
 _MAX_TOOL_ITERATIONS: int = 50
 _WALL_CLOCK_DEADLINE_S: float = 1800.0  # 30 minutes per session
+
+# Bound on the preflight reachability probe. The ollama client otherwise has
+# no timeout (httpx Timeout=None), so a host that accepts the connection but
+# never responds would hang config.resolve() — and the whole CLI — indefinitely.
+# Mirrors the Anthropic provider's 5s az-login probe bound.
+_PREFLIGHT_TIMEOUT_S: float = 5.0
 
 _DEFAULT_HOST_LABEL: str = "default host (http://localhost:11434)"
 
@@ -98,6 +105,7 @@ def _model_is_available(requested: str, available: set[str]) -> bool:
 class OllamaProvider:
     name = "ollama"
     auth_env_keys = frozenset({"OLLAMA_HOST"})
+    default_model = "gpt-oss:20b"
 
     def validate_auth(
         self, env: Mapping[str, str], *, model: str | None = None
@@ -110,7 +118,7 @@ class OllamaProvider:
         """
         host = env.get("OLLAMA_HOST") or None
         host_label = host or _DEFAULT_HOST_LABEL
-        client = Client(host=host)
+        client = Client(host=host, timeout=_PREFLIGHT_TIMEOUT_S)
         try:
             listed = client.list()
         except Exception as e:  # any client/transport error == unreachable
@@ -174,15 +182,28 @@ class OllamaProvider:
 
         try:
             for _iteration in range(_MAX_TOOL_ITERATIONS):
-                if time.monotonic() > deadline:
+                now = time.monotonic()
+                if now > deadline:
                     timed_out = True
                     break
 
-                response = await client.chat(
-                    model=model,
-                    messages=messages,
-                    tools=tool_specs or None,
-                )
+                # Bound each request by the remaining wall-clock budget. Without
+                # this, a single slow/hung generation runs unbounded: the check
+                # above only gates *starting* an iteration, and the ollama client
+                # has no request timeout of its own (httpx Timeout=None).
+                try:
+                    response = await asyncio.wait_for(
+                        client.chat(
+                            model=model,
+                            messages=messages,
+                            tools=tool_specs or None,
+                        ),
+                        timeout=deadline - now,
+                    )
+                except TimeoutError:
+                    timed_out = True
+                    break
+
                 input_tokens += int(response.prompt_eval_count or 0)
                 output_tokens += int(response.eval_count or 0)
                 msg = response.message
@@ -195,18 +216,22 @@ class OllamaProvider:
                     assistant_entry["tool_calls"] = msg.tool_calls
                 messages.append(assistant_entry)
 
+                # Count the tool calls the model requested this turn, even if the
+                # budget cut-off below skips dispatching them — the telemetry
+                # should reflect what the model asked for.
+                tool_calls = msg.tool_calls or []
+                tool_calls_count += len(tool_calls)
+
                 # Best-effort budget check: stop before doing more work once
                 # we've overshot. _classify then buckets this as
                 # budget_exceeded (input_tokens > budget).
                 if input_tokens > token_budget:
                     break
 
-                tool_calls = msg.tool_calls or []
                 if not tool_calls:
                     break  # final answer -> completed
 
                 for call in tool_calls:
-                    tool_calls_count += 1
                     name = call.function.name
                     args = dict(call.function.arguments or {})
                     handler = handlers.get(name)
@@ -219,6 +244,7 @@ class OllamaProvider:
                         continue
                     try:
                         raw = await handler(args)
+                        content = _flatten_content(raw)
                     except Exception as e:  # tool errors feed back to the model
                         messages.append({
                             "role": "tool",
@@ -231,7 +257,7 @@ class OllamaProvider:
                     messages.append({
                         "role": "tool",
                         "tool_name": name,
-                        "content": _flatten_content(raw),
+                        "content": content,
                     })
             else:
                 # Loop exhausted range() without breaking -> stuck calling tools.
@@ -241,25 +267,13 @@ class OllamaProvider:
 
         duration_ms = int((time.monotonic() - started) * 1000)
 
-        if timed_out:
-            return SessionResult(
-                outcome="timed_out",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=0,
-                cache_write_tokens=0,
-                duration_ms=duration_ms,
-                tool_calls_count=tool_calls_count,
-                refusal_text=None,
-                error_text=None,
-            )
-
         classified = _classify(
             stop_reason=None,
             usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
             refusal_text=None,
             budget=token_budget,
             api_error=api_error,
+            timed_out=timed_out,
         )
         return SessionResult(
             outcome=classified.outcome,

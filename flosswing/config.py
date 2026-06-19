@@ -51,10 +51,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from flosswing.agent.providers import registry
+from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+from flosswing.agent.providers.ollama_native import OllamaProvider
 from flosswing.errors import ProviderNotImplementedError
 
-DEFAULT_MODEL: str = "claude-opus-4-7"
-DEFAULT_OLLAMA_MODEL: str = "gpt-oss:20b"
+# Per-provider default model lives on the provider class (single source of
+# truth); these module-level aliases preserve the names other code/tests use.
+DEFAULT_MODEL: str = AnthropicSDKProvider.default_model
+DEFAULT_OLLAMA_MODEL: str = OllamaProvider.default_model
 DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
 DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
 DEFAULT_VALIDATE_TOKEN_BUDGET: int = 100_000
@@ -115,8 +119,16 @@ def resolve(
     output_formats: list[str] | None = None,
     output_dir: Path | None = None,
     provider: str | None = None,
+    preflight: bool = True,
 ) -> Config:
-    """Build a Config from CLI flags + env. Raises if no auth path."""
+    """Build a Config from CLI flags + env. Raises if no auth path.
+
+    When ``preflight`` is False, the provider's ``validate_auth``
+    reachability/credential check is skipped. Read-only commands that never run
+    the model (e.g. ``flosswing report``) pass False so they don't require a
+    live backend — the Ollama preflight would otherwise ping the server and
+    fail offline when ``FLOSSWING_PROVIDER=ollama`` is set.
+    """
     provider_name = provider or os.environ.get(PROVIDER_ENV_VAR) or DEFAULT_PROVIDER
     prov = registry.get_provider(provider_name)  # UnknownProviderError if bogus
     if not registry.is_implemented(provider_name):
@@ -124,13 +136,12 @@ def resolve(
             f"{provider_name} provider is not yet implemented; see ARCHITECTURE.md"
         )
     # Resolve the model before preflight so providers that verify model
-    # availability (Ollama) can check the concrete model name.
-    default_model = (
-        DEFAULT_OLLAMA_MODEL if provider_name == "ollama" else DEFAULT_MODEL
-    )
-    resolved_model = model or default_model
-    # AuthCredentialMissingError / OllamaBackendUnavailableError if unusable.
-    prov.validate_auth(os.environ, model=resolved_model)
+    # availability (Ollama) can check the concrete model name. The default is a
+    # property of the selected provider, not a per-name special case here.
+    resolved_model = model or prov.default_model
+    if preflight:
+        # AuthCredentialMissingError / OllamaBackendUnavailableError if unusable.
+        prov.validate_auth(os.environ, model=resolved_model)
     auth_env: dict[str, str] = {
         k: os.environ[k] for k in prov.auth_env_keys if k in os.environ
     }

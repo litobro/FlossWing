@@ -30,11 +30,17 @@ class _FakeSyncClient:
     """Stands in for ollama.Client in validate_auth tests."""
 
     def __init__(
-        self, names: list[str] | None, exc: Exception | None = None, *, host: Any = None
+        self,
+        names: list[str] | None,
+        exc: Exception | None = None,
+        *,
+        host: Any = None,
+        timeout: Any = None,
     ) -> None:
         self._names = names or []
         self._exc = exc
         self.host = host
+        self.timeout = timeout
 
     def list(self) -> _FakeListResponse:
         if self._exc is not None:
@@ -43,8 +49,9 @@ class _FakeSyncClient:
 
 
 def _sync_client_factory(names: list[str] | None = None, exc: Exception | None = None):  # type: ignore[no-untyped-def]  # returns an untyped client-factory closure for tests
-    def factory(host: Any = None) -> _FakeSyncClient:
-        return _FakeSyncClient(names, exc, host=host)
+    # Accept **kwargs so the factory tolerates the timeout= the preflight passes.
+    def factory(host: Any = None, **kwargs: Any) -> _FakeSyncClient:
+        return _FakeSyncClient(names, exc, host=host, timeout=kwargs.get("timeout"))
     return factory
 
 
@@ -126,10 +133,25 @@ def test_validate_auth_raises_when_model_missing(monkeypatch: pytest.MonkeyPatch
     assert "ollama pull gemma4" in ei.value.message
 
 
+def test_validate_auth_passes_a_timeout_to_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The preflight probe must be bounded; otherwise a hung host stalls the CLI.
+    captured: dict[str, Any] = {}
+
+    def factory(host: Any = None, **kwargs: Any) -> _FakeSyncClient:
+        captured["timeout"] = kwargs.get("timeout")
+        return _FakeSyncClient(["gpt-oss:20b"], host=host)
+
+    monkeypatch.setattr(on, "Client", factory)
+    on.OllamaProvider().validate_auth({}, model="gpt-oss:20b")
+    assert captured["timeout"] == on._PREFLIGHT_TIMEOUT_S
+    assert captured["timeout"] is not None
+
+
 def test_name_and_auth_env_keys() -> None:
     prov = on.OllamaProvider()
     assert prov.name == "ollama"
     assert prov.auth_env_keys == frozenset({"OLLAMA_HOST"})
+    assert prov.default_model == "gpt-oss:20b"
 
 
 # --- run_session fakes -------------------------------------------------------
@@ -212,13 +234,15 @@ def _async_factory(client: Any):  # type: ignore[no-untyped-def]  # returns an u
 
 
 class _FakeTool:
-    def __init__(self, name: str, result: dict[str, Any]) -> None:
+    # result is typed Any so tests can also model a contract-violating return
+    # (e.g. None) and exercise the malformed-result path.
+    def __init__(self, name: str, result: Any) -> None:
         self.name = name
         self.description = f"{name} tool"
         self.input_schema = {"type": "object"}
         self._result = result
 
-    async def handler(self, args: dict[str, Any]) -> dict[str, Any]:
+    async def handler(self, args: dict[str, Any]) -> Any:
         return self._result
 
 
@@ -305,6 +329,9 @@ def test_run_session_budget_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
     res = _run(on.OllamaProvider(), token_budget=100)
     assert res.outcome == "budget_exceeded"
+    # The over-budget response requested one tool; it is counted even though
+    # the budget cut-off skips dispatching it.
+    assert res.tool_calls_count == 1
 
 
 def test_run_session_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -314,6 +341,40 @@ def test_run_session_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     res = _run(on.OllamaProvider())
     assert res.outcome == "timed_out"
     assert res.tool_calls_count == 0
+
+
+def test_run_session_times_out_on_slow_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A single chat() that runs longer than the remaining wall-clock budget is
+    # cut off by asyncio.wait_for -> timed_out (the deadline must bound an
+    # in-flight request, not just gate the start of the next iteration).
+    monkeypatch.setattr(on, "_WALL_CLOCK_DEADLINE_S", 0.05)
+
+    class _SlowAsyncClient:
+        def __init__(self, *, host: Any = None) -> None:
+            self.host = host
+
+        async def chat(self, **_kw: Any) -> _FakeChatResponse:
+            await asyncio.sleep(10)  # far longer than the 0.05s deadline
+            return _FakeChatResponse(_FakeMessage(content="too late"))
+
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(_SlowAsyncClient()))
+    res = _run(on.OllamaProvider())
+    assert res.outcome == "timed_out"
+
+
+def test_run_session_handles_malformed_tool_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A handler that returns a non-dict (contract violation) must degrade to a
+    # single tool-error message fed back to the model, not crash the session.
+    client = _ScriptedAsyncClient([
+        _FakeChatResponse(_FakeMessage(tool_calls=[_FakeToolCall("grep", {})])),
+        _FakeChatResponse(_FakeMessage(content="ok")),
+    ])
+    monkeypatch.setattr(on, "AsyncClient", _async_factory(client))
+    tool = _FakeTool("grep", None)  # handler returns None -> _flatten_content fails
+    res = _run(on.OllamaProvider(), tools=[tool])
+    assert res.outcome == "completed"
+    tool_msgs = [m for m in client.calls[1]["messages"] if m.get("role") == "tool"]
+    assert tool_msgs and "raised" in tool_msgs[0]["content"]
 
 
 def test_run_session_iteration_cap_errors(monkeypatch: pytest.MonkeyPatch) -> None:

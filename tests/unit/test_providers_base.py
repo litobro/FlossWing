@@ -30,6 +30,23 @@ def test_classify_refused() -> None:
     assert result.refusal_text == "I can't help with that."
 
 
+def test_classify_timed_out_takes_precedence() -> None:
+    # timed_out wins over budget (and would over api_error) so a provider that
+    # bounds its own loop gets a single shared classification path.
+    result = base._classify(
+        stop_reason="end_turn",
+        usage={"input_tokens": 500_000, "output_tokens": 9},
+        refusal_text=None,
+        budget=200_000,
+        api_error=None,
+        timed_out=True,
+    )
+    assert result.outcome == "timed_out"
+    assert result.input_tokens == 500_000
+    assert result.error_text is None
+    assert result.refusal_text is None
+
+
 def test_classify_budget_exceeded() -> None:
     result = base._classify(
         stop_reason="end_turn",

@@ -260,6 +260,9 @@ def report(run_id: str, format_: str, output_dir: str | None) -> None:
             auto_render=True,
             output_formats=formats,
             output_dir=resolved_output_dir,
+            # report only renders stored state; never reach for a live backend
+            # (an offline Ollama would otherwise fail the preflight here).
+            preflight=False,
         )
     except FlosswingError as e:
         click.echo(e.message, err=True)

@@ -191,6 +191,7 @@ def _harvest_usage(raw: dict[str, Any] | None) -> dict[str, int]:
 class AnthropicSDKProvider:
     name = "anthropic"
     auth_env_keys = _AUTH_ENV_KEYS
+    default_model = "claude-opus-4-7"
 
     def validate_auth(
         self, env: Mapping[str, str], *, model: str | None = None

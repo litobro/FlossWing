@@ -38,6 +38,9 @@ class UnimplementedProvider:
     def __init__(self, name: str) -> None:
         self.name = name
         self.auth_env_keys: frozenset[str] = frozenset()
+        # Never read: config.resolve() rejects stubs before model resolution.
+        # Present only for Provider-Protocol conformance.
+        self.default_model = ""
 
     def validate_auth(
         self, env: Any, *, model: str | None = None
