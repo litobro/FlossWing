@@ -585,7 +585,16 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/unit/test_providers_ollama.py`:
+First, restore the test's `asyncio` import (Task 4 trimmed it as unused). At the top of `tests/unit/test_providers_ollama.py`, add `import asyncio` back to the stdlib import group (above `from typing import Any`), so it reads:
+
+```python
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+```
+
+Then append to `tests/unit/test_providers_ollama.py`:
 
 ```python
 # --- run_session fakes -------------------------------------------------------
@@ -802,9 +811,26 @@ def test_run_session_never_synthesizes_refusal(monkeypatch: pytest.MonkeyPatch) 
 Run: `.venv/bin/python -m pytest tests/unit/test_providers_ollama.py -k run_session -v`
 Expected: FAIL with `AttributeError: 'OllamaProvider' object has no attribute 'run_session'`
 
-- [ ] **Step 3: Append `run_session` to `OllamaProvider`**
+- [ ] **Step 3: Restore imports, then append `run_session` to `OllamaProvider`**
 
-Append this method inside the `OllamaProvider` class in `flosswing/agent/providers/ollama_native.py` (after `validate_auth`):
+First, restore the imports `run_session` consumes (Task 4 trimmed them as unused). Update the import block at the top of `flosswing/agent/providers/ollama_native.py` so it reads EXACTLY:
+
+```python
+from __future__ import annotations
+
+import time
+from collections.abc import Mapping
+from typing import Any, cast
+
+from ollama import AsyncClient, ChatResponse, Client
+
+from flosswing.agent.providers.base import SessionResult, _classify
+from flosswing.errors import OllamaBackendUnavailableError, scrub
+```
+
+That re-adds `import time`, `cast` (to the typing import), `AsyncClient` + `ChatResponse` (to the ollama import), and the `from flosswing.agent.providers.base import SessionResult, _classify` line. The run_session method below uses all of them, so the module is ruff-clean again once appended.
+
+Then append this method inside the `OllamaProvider` class in `flosswing/agent/providers/ollama_native.py` (after `validate_auth`):
 
 ```python
     async def run_session(
@@ -957,10 +983,13 @@ Append this method inside the `OllamaProvider` class in `flosswing/agent/provide
         )
 ```
 
-- [ ] **Step 4: Run tests + type check to verify pass**
+- [ ] **Step 4: Run tests + lint + type check to verify pass**
 
 Run: `.venv/bin/python -m pytest tests/unit/test_providers_ollama.py -v`
 Expected: PASS (all preflight, helper, and run_session tests)
+
+Run: `.venv/bin/ruff check flosswing/agent/providers/ollama_native.py tests/unit/test_providers_ollama.py`
+Expected: `All checks passed!` (no unused imports, no lines >100 chars — wrap any the linter flags)
 
 Run: `.venv/bin/mypy flosswing/agent/providers/ollama_native.py`
 Expected: `Success: no issues found`
