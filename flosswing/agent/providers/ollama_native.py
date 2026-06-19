@@ -27,13 +27,11 @@ docs/specs/2026-06-18-ollama-provider-design.md.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
-from ollama import AsyncClient, ChatResponse, Client
+from ollama import Client
 
-from flosswing.agent.providers.base import SessionResult, _classify
 from flosswing.errors import OllamaBackendUnavailableError, scrub
 
 # Safety guards for the native loop (the SDK normally provides these).
@@ -112,7 +110,7 @@ class OllamaProvider:
         client = Client(host=host)
         try:
             listed = client.list()
-        except Exception as e:  # noqa: BLE001 - any client/transport error == unreachable
+        except Exception as e:  # any client/transport error == unreachable
             raise OllamaBackendUnavailableError(
                 scrub(
                     f"ollama not reachable at {host_label}: {type(e).__name__}: {e}"

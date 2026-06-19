@@ -6,14 +6,12 @@ The ollama client is mocked at the package boundary (the module-level
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
 from flosswing.agent.providers import ollama_native as on
 from flosswing.errors import OllamaBackendUnavailableError
-
 
 # --- fakes -------------------------------------------------------------------
 
@@ -30,7 +28,9 @@ class _FakeListResponse:
 class _FakeSyncClient:
     """Stands in for ollama.Client in validate_auth tests."""
 
-    def __init__(self, names: list[str] | None, exc: Exception | None = None, *, host: Any = None) -> None:
+    def __init__(
+        self, names: list[str] | None, exc: Exception | None = None, *, host: Any = None
+    ) -> None:
         self._names = names or []
         self._exc = exc
         self.host = host
@@ -53,7 +53,10 @@ def test_to_ollama_tool_shape() -> None:
     class _T:
         name = "grep"
         description = "search the repo"
-        input_schema = {"type": "object", "properties": {"pattern": {"type": "string"}}}
+        input_schema: ClassVar[dict[str, Any]] = {
+            "type": "object",
+            "properties": {"pattern": {"type": "string"}},
+        }
 
     spec = on._to_ollama_tool(_T())
     assert spec == {
