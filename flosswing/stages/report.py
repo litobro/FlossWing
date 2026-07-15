@@ -510,6 +510,13 @@ def _poc_extension_for(source_file_path: str) -> str:
 
 
 def _render_run_header(run: ReportRun) -> str:
+    # Under Foundry mode `model` is a tier alias (e.g. claude-opus-4-7); the
+    # deployment inference actually ran on is recorded in config_json. Surface
+    # it next to the alias so the header isn't misleading. Absent = direct mode.
+    model_cell = _escape_table_cell(run.model)
+    deployment = run.config.get("foundry_deployment")
+    if isinstance(deployment, str) and deployment:
+        model_cell = f"{model_cell} (foundry deployment: {_escape_table_cell(deployment)})"
     rows = [
         ("target_repo_path", _escape_table_cell(run.target_repo_path)),
         ("status", _escape_table_cell(run.status)),
@@ -521,7 +528,7 @@ def _render_run_header(run: ReportRun) -> str:
         # Render just the used count; per-stage caps are in
         # `runs.config_json` for operators who want to compute headroom.
         ("budget_used", f"{run.budget_used} tokens"),
-        ("model", _escape_table_cell(run.model)),
+        ("model", model_cell),
     ]
     lines = ["| Field | Value |", "| --- | --- |"]
     lines.extend(f"| {k} | {v} |" for k, v in rows)
