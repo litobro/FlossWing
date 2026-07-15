@@ -85,11 +85,42 @@ def _ensure_run_dir(run_id: str) -> Path:
     return base
 
 
+# Foundry mode routes a tier alias (opus/sonnet/haiku) to a named deployment via
+# ANTHROPIC_DEFAULT_<TIER>_MODEL; the request only carries the alias. cfg.model
+# records that alias, not the deployment inference actually ran on — resolve the
+# deployment so run provenance reflects reality instead of a misleading "opus".
+_FOUNDRY_TIER_ENV: dict[str, str] = {
+    "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+}
+
+
+def _foundry_deployment(cfg: Config) -> str | None:
+    """Deployment ``cfg.model`` routes to under Foundry mode, else ``None``.
+
+    Returns ``None`` outside Foundry mode, when ``cfg.model``'s tier can't be
+    identified, or when that tier has no configured deployment. Reads only the
+    non-sensitive routing/deployment vars already collected into ``auth_env``.
+    """
+    if cfg.auth_env.get("CLAUDE_CODE_USE_FOUNDRY") != "1":
+        return None
+    if "ANTHROPIC_FOUNDRY_RESOURCE" not in cfg.auth_env:
+        return None
+    model_lower = cfg.model.lower()
+    for tier, env_key in _FOUNDRY_TIER_ENV.items():
+        if tier in model_lower:
+            return cfg.auth_env.get(env_key)
+    return None
+
+
 def _config_for_run_row(cfg: Config) -> str:
     # Persist non-sensitive config only. auth_env stays out of the DB.
     payload = {
         "repo_root": str(cfg.repo_root),
         "model": cfg.model,
+        # Deployment name only (already non-sensitive; never an API key).
+        "foundry_deployment": _foundry_deployment(cfg),
         "provider": cfg.provider,
         "recon_token_budget": cfg.recon_token_budget,
         "hunt_token_budget": cfg.hunt_token_budget,
@@ -508,9 +539,14 @@ async def run_scan(cfg: Config) -> ScanResult:
             f"{trace_result.input_tokens} / {trace_result.output_tokens}"
         )
 
+    _deployment = _foundry_deployment(cfg)
+    _model_line = f"  model:         {cfg.model}"
+    if _deployment is not None:
+        _model_line += f" -> foundry deployment: {_deployment}"
+
     summary_lines = [
         f"Run {run_id} {final_status}.",
-        f"  model:         {cfg.model}",
+        _model_line,
         "  recon:",
         f"    outcome:     {recon_result.outcome}",
         (
