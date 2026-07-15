@@ -48,6 +48,22 @@ software. Use it accordingly:
   You can measure detection quality on a known-vulnerability corpus with
   `flosswing eval` (see below).
 
+## Found in the wild
+
+Real vulnerabilities discovered with FlossWing and disclosed responsibly:
+
+- **[CVE-2026-55835](https://github.com/Lookyloo/lookyloo/security/advisories/GHSA-66gj-hmcp-5cfj)**
+  (GHSA-66gj-hmcp-5cfj) — Lookyloo ≤ 1.39.3. An unauthenticated
+  parameter-passing bug in the capture report endpoint let an attacker reach
+  admin-level functionality, enabling a denial-of-service against an integrated
+  MISP instance via unintended search queries. Patched in 1.39.4.
+
+**Found something with FlossWing?** If a scan led you to a real vulnerability
+that was assigned a CVE (or GHSA), we'd love to list it here — please open a PR
+adding it to this section. Keep it to disclosed, fixed, or maintainer-coordinated
+findings only; follow the [responsible disclosure](#responsible-use--disclosure)
+guidance above before going public with anything.
+
 ## Requirements
 
 - **Python 3.11+**
