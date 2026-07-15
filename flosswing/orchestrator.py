@@ -28,6 +28,7 @@ from sqlalchemy import func, or_, select
 from ulid import ULID
 
 from flosswing import __version__, errors
+from flosswing.agent.providers import anthropic_sdk
 from flosswing.config import Config
 from flosswing.index.build import IndexBuildResult
 from flosswing.stages import dedupe as dedupe_stage
@@ -85,33 +86,15 @@ def _ensure_run_dir(run_id: str) -> Path:
     return base
 
 
-# Foundry mode routes a tier alias (opus/sonnet/haiku) to a named deployment via
-# ANTHROPIC_DEFAULT_<TIER>_MODEL; the request only carries the alias. cfg.model
-# records that alias, not the deployment inference actually ran on — resolve the
-# deployment so run provenance reflects reality instead of a misleading "opus".
-_FOUNDRY_TIER_ENV: dict[str, str] = {
-    "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-}
-
-
 def _foundry_deployment(cfg: Config) -> str | None:
     """Deployment ``cfg.model`` routes to under Foundry mode, else ``None``.
 
-    Returns ``None`` outside Foundry mode, when ``cfg.model``'s tier can't be
-    identified, or when that tier has no configured deployment. Reads only the
-    non-sensitive routing/deployment vars already collected into ``auth_env``.
+    Thin wrapper over the provider's resolver so run provenance reflects the
+    deployment inference actually ran on, not the tier alias ``cfg.model``
+    carries. The routing rules live in the provider (their single source of
+    truth); the orchestrator only records the result.
     """
-    if cfg.auth_env.get("CLAUDE_CODE_USE_FOUNDRY") != "1":
-        return None
-    if "ANTHROPIC_FOUNDRY_RESOURCE" not in cfg.auth_env:
-        return None
-    model_lower = cfg.model.lower()
-    for tier, env_key in _FOUNDRY_TIER_ENV.items():
-        if tier in model_lower:
-            return cfg.auth_env.get(env_key)
-    return None
+    return anthropic_sdk.foundry_deployment(cfg.auth_env, cfg.model)
 
 
 def _config_for_run_row(cfg: Config) -> str:
@@ -541,7 +524,7 @@ async def run_scan(cfg: Config) -> ScanResult:
 
     _deployment = _foundry_deployment(cfg)
     _model_line = f"  model:         {cfg.model}"
-    if _deployment is not None:
+    if _deployment:  # truthiness matches the report header (report.py)
         _model_line += f" -> foundry deployment: {_deployment}"
 
     summary_lines = [

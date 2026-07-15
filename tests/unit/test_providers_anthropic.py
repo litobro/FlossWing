@@ -58,6 +58,65 @@ def test_validate_auth_rejects_empty_env(monkeypatch: pytest.MonkeyPatch) -> Non
         _provider().validate_auth({})
 
 
+def test_foundry_routing_enabled_true_when_both_present() -> None:
+    assert a.foundry_routing_enabled(
+        {"CLAUDE_CODE_USE_FOUNDRY": "1", "ANTHROPIC_FOUNDRY_RESOURCE": "res"}
+    )
+
+
+def test_foundry_routing_enabled_false_without_resource() -> None:
+    assert not a.foundry_routing_enabled({"CLAUDE_CODE_USE_FOUNDRY": "1"})
+
+
+def test_foundry_routing_enabled_false_when_flag_not_one() -> None:
+    assert not a.foundry_routing_enabled(
+        {"CLAUDE_CODE_USE_FOUNDRY": "true", "ANTHROPIC_FOUNDRY_RESOURCE": "res"}
+    )
+
+
+def _foundry_env(**extra: str) -> dict[str, str]:
+    return {
+        "CLAUDE_CODE_USE_FOUNDRY": "1",
+        "ANTHROPIC_FOUNDRY_RESOURCE": "res",
+        **extra,
+    }
+
+
+def test_foundry_deployment_none_outside_foundry_mode() -> None:
+    assert a.foundry_deployment(
+        {"ANTHROPIC_DEFAULT_OPUS_MODEL": "my-opus"}, "claude-opus-4-7"
+    ) is None
+
+
+def test_foundry_deployment_resolves_matched_tier() -> None:
+    env = _foundry_env(ANTHROPIC_DEFAULT_OPUS_MODEL="my-opus-deploy")
+    assert a.foundry_deployment(env, "claude-opus-4-7") == "my-opus-deploy"
+
+
+def test_foundry_deployment_picks_tier_by_model_keyword() -> None:
+    env = _foundry_env(
+        ANTHROPIC_DEFAULT_OPUS_MODEL="opus-dep",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL="haiku-dep",
+    )
+    assert a.foundry_deployment(env, "claude-haiku-4-5") == "haiku-dep"
+
+
+def test_foundry_deployment_none_when_tier_unmatched() -> None:
+    env = _foundry_env(ANTHROPIC_DEFAULT_OPUS_MODEL="opus-dep")
+    assert a.foundry_deployment(env, "some-custom-alias") is None
+
+
+def test_foundry_deployment_none_when_deployment_unset() -> None:
+    assert a.foundry_deployment(_foundry_env(), "claude-opus-4-7") is None
+
+
+def test_foundry_deployment_empty_string_normalised_to_none() -> None:
+    """A present-but-empty deployment var must read identically to an absent
+    one — otherwise the banner and report header disagree (regression guard)."""
+    env = _foundry_env(ANTHROPIC_DEFAULT_OPUS_MODEL="")
+    assert a.foundry_deployment(env, "claude-opus-4-7") is None
+
+
 def test_api_error_from_result_clean_run_returns_none() -> None:
     assert a._api_error_from_result(
         is_error=False, subtype="success", errors=None
