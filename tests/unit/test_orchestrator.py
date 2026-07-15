@@ -1177,3 +1177,48 @@ def test_config_for_run_row_persists_provider(tmp_path: Path) -> None:
     cfg = replace(_cfg(tmp_path), provider="bedrock")
     payload = _json.loads(_config_for_run_row(cfg))
     assert payload["provider"] == "bedrock"
+
+
+def _foundry_cfg(tmp_path: Path, **deployment_env: str) -> Config:
+    from dataclasses import replace
+
+    return replace(
+        _cfg(tmp_path),
+        auth_env={
+            "CLAUDE_CODE_USE_FOUNDRY": "1",
+            "ANTHROPIC_FOUNDRY_RESOURCE": "res",
+            "ANTHROPIC_FOUNDRY_API_KEY": "key",
+            **deployment_env,
+        },
+    )
+
+
+def test_config_for_run_row_records_foundry_deployment(tmp_path: Path) -> None:
+    """Under Foundry mode config_json records the resolved deployment, not the
+    tier alias cfg.model carries."""
+    import json as _json
+
+    from flosswing.orchestrator import _config_for_run_row
+
+    cfg = _foundry_cfg(tmp_path, ANTHROPIC_DEFAULT_OPUS_MODEL="opus-deploy-1")
+    payload = _json.loads(_config_for_run_row(cfg))
+    assert payload["foundry_deployment"] == "opus-deploy-1"
+
+
+def test_config_for_run_row_deployment_none_in_direct_mode(tmp_path: Path) -> None:
+    import json as _json
+
+    from flosswing.orchestrator import _config_for_run_row
+
+    payload = _json.loads(_config_for_run_row(_cfg(tmp_path)))
+    assert payload["foundry_deployment"] is None
+
+
+def test_foundry_deployment_empty_var_stays_none(tmp_path: Path) -> None:
+    """A present-but-empty deployment var normalises to None so the banner
+    (orchestrator) and report header agree on suppressing it — the empty-string
+    inconsistency guard."""
+    from flosswing.orchestrator import _foundry_deployment
+
+    cfg = _foundry_cfg(tmp_path, ANTHROPIC_DEFAULT_OPUS_MODEL="")
+    assert _foundry_deployment(cfg) is None

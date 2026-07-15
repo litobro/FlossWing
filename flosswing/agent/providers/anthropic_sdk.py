@@ -60,6 +60,15 @@ _FOUNDRY_MODEL_KEYS: tuple[str, ...] = (
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 )
 
+# Tier keyword -> deployment env var. Foundry mode routes a tier alias
+# (opus/sonnet/haiku) to a named deployment; the request only carries the alias.
+# Order mirrors _FOUNDRY_MODEL_KEYS so the two never drift.
+_FOUNDRY_TIER_ENV: dict[str, str] = {
+    "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+}
+
 _AUTH_ENV_KEYS: frozenset[str] = frozenset(
     (
         *_DIRECT_KEYS,
@@ -80,6 +89,37 @@ _MISSING_AUTH_MSG = (
     "      AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_CLIENT_SECRET\n"
     "      (Entra ID service principal)."
 )
+
+
+def foundry_routing_enabled(env: Mapping[str, str]) -> bool:
+    """True iff Foundry tier->deployment routing is active for ``env``.
+
+    Single source of truth for "is this a Foundry run": both auth validation
+    and run-provenance resolution read it, so the two can't disagree about what
+    counts as active Foundry mode.
+    """
+    return (
+        env.get("CLAUDE_CODE_USE_FOUNDRY") == "1"
+        and "ANTHROPIC_FOUNDRY_RESOURCE" in env
+    )
+
+
+def foundry_deployment(env: Mapping[str, str], model: str) -> str | None:
+    """Deployment ``model`` routes to under Foundry mode, else ``None``.
+
+    Returns ``None`` outside Foundry mode, when ``model``'s tier can't be
+    identified, or when the matched tier has no (or an empty) configured
+    deployment. Normalising empty to ``None`` here keeps every provenance
+    surface consistent — an absent and a blank deployment read identically.
+    Reads only the non-sensitive routing/deployment vars; never a credential.
+    """
+    if not foundry_routing_enabled(env):
+        return None
+    model_lower = model.lower()
+    for tier, env_key in _FOUNDRY_TIER_ENV.items():
+        if tier in model_lower:
+            return env.get(env_key) or None
+    return None
 
 
 def _has_az_session() -> bool:
@@ -198,19 +238,16 @@ class AnthropicSDKProvider:
         Same logic previously inlined in config.resolve().
         """
         has_direct = "ANTHROPIC_API_KEY" in env
-        foundry_routing_enabled = (
-            env.get("CLAUDE_CODE_USE_FOUNDRY") == "1"
-            and "ANTHROPIC_FOUNDRY_RESOURCE" in env
-        )
+        routing_enabled = foundry_routing_enabled(env)
         has_foundry_key = _FOUNDRY_API_KEY in env
         has_entra_sp = all(k in env for k in _ENTRA_SP_KEYS)
         has_az_login = (
-            foundry_routing_enabled
+            routing_enabled
             and not has_foundry_key
             and not has_entra_sp
             and _has_az_session()
         )
-        has_foundry = foundry_routing_enabled and (
+        has_foundry = routing_enabled and (
             has_foundry_key or has_entra_sp or has_az_login
         )
         if not (has_direct or has_foundry):
