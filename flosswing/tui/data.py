@@ -106,9 +106,14 @@ def list_runs() -> list[RunRow]:
                 ).group_by(AgentSession.run_id)
             ).all()
         }
-        # Stage-derivation evidence, gathered once via grouped/DISTINCT queries
-        # (a fixed query count regardless of run count). Only running rows
-        # actually derive an active stage from it.
+        # Stage-derivation evidence for the *active* stage only, gathered once
+        # via grouped/DISTINCT queries (a fixed query count regardless of run
+        # count). We collect just Recon/Index/Hunt evidence: the active stage is
+        # always one of these three, because Validate/Gapfill/Dedupe/Trace pass
+        # active_if_running=False in _derive_stages and so can never be the
+        # active stage. The post-Hunt evidence is therefore left as 0/False
+        # below — it would only affect those stages' 'done' state, which
+        # list_runs does not surface (unlike run_progress, which shows it).
         recon_ids = {
             row[0] for row in s.execute(select(ReconArtifact.run_id).distinct()).all()
         }
@@ -117,34 +122,12 @@ def list_runs() -> list[RunRow]:
         }
         hunt_total: dict[str, int] = {}
         hunt_done: dict[str, int] = {}
-        gapfill_ids: set[str] = set()
-        for run_id, status, source in s.execute(
-            select(HuntTask.run_id, HuntTask.status, HuntTask.source)
+        for run_id, status in s.execute(
+            select(HuntTask.run_id, HuntTask.status)
         ).all():
             hunt_total[run_id] = hunt_total.get(run_id, 0) + 1
             if status not in ("pending", "running"):
                 hunt_done[run_id] = hunt_done.get(run_id, 0) + 1
-            if source == "gapfill":
-                gapfill_ids.add(run_id)
-        validation_ids = {
-            row[0]
-            for row in s.execute(
-                select(Finding.run_id)
-                .join(Validation, Validation.finding_id == Finding.id)
-                .distinct()
-            ).all()
-        }
-        cluster_ids = {
-            row[0] for row in s.execute(select(DedupeCluster.run_id).distinct()).all()
-        }
-        trace_ids = {
-            row[0]
-            for row in s.execute(
-                select(Finding.run_id)
-                .join(Trace, Trace.finding_id == Finding.id)
-                .distinct()
-            ).all()
-        }
 
         runs = (
             s.execute(select(Run).order_by(Run.started_at.desc()))
@@ -155,16 +138,19 @@ def list_runs() -> list[RunRow]:
         for r in runs:
             active_stage: str | None = None
             if r.status == "running":
+                # Post-Hunt evidence is passed as 0/False on purpose: those
+                # stages are never the 'active' one, so their inputs can't
+                # change which stage this extracts (see the comment above).
                 stages = _derive_stages(
                     run_running=True,
                     recon_done=r.id in recon_ids,
                     index_done=r.id in index_ids,
                     hunt_total=hunt_total.get(r.id, 0),
                     hunt_done=hunt_done.get(r.id, 0),
-                    gapfill_done=r.id in gapfill_ids,
-                    n_validations=1 if r.id in validation_ids else 0,
-                    n_clusters=1 if r.id in cluster_ids else 0,
-                    n_traces=1 if r.id in trace_ids else 0,
+                    gapfill_done=False,
+                    n_validations=0,
+                    n_clusters=0,
+                    n_traces=0,
                 )
                 active_stage = next(
                     (st.name for st in stages if st.state == "active"), None

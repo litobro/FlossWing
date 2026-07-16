@@ -44,9 +44,11 @@ def _format_elapsed(started_at: str) -> str:
 
     try:
         start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
+        # A timezone-naive timestamp (no offset/'Z') makes the subtraction
+        # below raise TypeError; catch it here so the poll never sees it.
+        delta = datetime.now(UTC) - start
+    except (ValueError, AttributeError, TypeError):
         return ""
-    delta = datetime.now(UTC) - start
     secs = int(delta.total_seconds())
     if secs < 0:
         return ""
@@ -108,7 +110,10 @@ class RunsScreen(Screen[None]):
                 _LIVE_GLYPH.get(r.liveness, "?"),
                 style=_LIVE_STYLE.get(r.liveness, ""),
             )
-            elapsed = _format_elapsed(r.started_at) if r.status == "running" else ""
+            # Only live runs get an elapsed value: a stale (crashed) run keeps
+            # DB status 'running', so gating on status would grow its Elapsed
+            # unbounded and present a dead scan as if still working.
+            elapsed = _format_elapsed(r.started_at) if r.liveness == "live" else ""
             table.add_row(
                 r.short_id,
                 # repo path is operator/DB-derived — render literally so it

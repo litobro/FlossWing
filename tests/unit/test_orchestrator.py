@@ -1304,3 +1304,32 @@ def test_pid_file_cleared_when_a_stage_raises(
         asyncio.run(orchestrator.run_scan(cfg))
     # The finally-clause must clear the marker even on an exception path.
     assert not runpid.run_pid_path(seen["run_id"]).exists()
+
+
+def test_pid_file_written_before_run_row_committed(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The PID marker must exist before the Run row is committed 'running', so
+    a TUI poll can never observe a running row with no live PID (false-stale)."""
+    import dataclasses
+
+    from flosswing import orchestrator, runpid
+    from flosswing.state.models import Run
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _stub_completed_pipeline(monkeypatch)
+
+    real_write = runpid.write_pid_file
+    row_absent_at_write: list[bool] = []
+
+    def spy_write(run_id: str) -> None:
+        with st_session.session_scope() as s:
+            row_absent_at_write.append(s.get(Run, run_id) is None)
+        real_write(run_id)
+
+    monkeypatch.setattr(runpid, "write_pid_file", spy_write)
+
+    cfg = dataclasses.replace(_cfg(tmp_path), auto_render=False)
+    asyncio.run(orchestrator.run_scan(cfg))
+    # The Run row must NOT yet be committed when the PID file is written.
+    assert row_absent_at_write == [True]

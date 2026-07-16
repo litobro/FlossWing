@@ -101,9 +101,12 @@ class RunDetailScreen(Screen[None]):
             )
         if p.hunt_tasks and 0 <= cursor < len(p.hunt_tasks):
             table.move_cursor(row=cursor)
-        # Stop polling once the run is terminal OR stale: a stale run's process
-        # is gone, so its DB rows will never change again.
-        if (p.status != "running" or p.liveness == "stale") and self._poll is not None:
+        # Stop polling only once the run reaches a terminal DB status. We do
+        # NOT stop on 'stale': a stale reading can be false/transient (e.g. the
+        # PID file hasn't been written yet, or a momentary read failure), and
+        # the interval is armed only in on_mount — stopping here would freeze
+        # the view for the rest of a still-running scan with no way to recover.
+        if p.status != "running" and self._poll is not None:
             self._poll.stop()
             self._poll = None
 

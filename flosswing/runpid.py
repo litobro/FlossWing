@@ -75,6 +75,32 @@ def _self_cmdline() -> list[str] | None:
     return _proc_cmdline(os.getpid())
 
 
+def _proc_starttime(pid: int) -> int | None:
+    """Process start time (clock ticks since boot) from ``/proc/<pid>/stat``.
+
+    This uniquely identifies a *process instance*: unlike the PID or the
+    command line, it does not repeat when the kernel reuses a PID for a new
+    process — even one launched with byte-identical argv. ``None`` if it can't
+    be read (no ``/proc``, process gone), so callers fall back to the cmdline
+    guard rather than mis-rejecting.
+    """
+    try:
+        data = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    # Fields: "pid (comm) state ppid ...". comm may contain spaces or ')', so
+    # split after the final ')'. starttime is field 22 overall, i.e. index 19
+    # of the fields that follow comm (which start at field 3, 'state').
+    _, _, rest = data.rpartition(")")
+    parts = rest.split()
+    if len(parts) < 20:
+        return None
+    try:
+        return int(parts[19])
+    except ValueError:
+        return None
+
+
 def write_pid_file(run_id: str) -> None:
     """Record the current process as the owner of ``run_id``.
 
@@ -85,6 +111,7 @@ def write_pid_file(run_id: str) -> None:
         "pid": os.getpid(),
         "created_at": _now_iso(),
         "cmdline": _self_cmdline(),
+        "starttime": _proc_starttime(os.getpid()),
     }
     try:
         p = run_pid_path(run_id)
@@ -149,6 +176,16 @@ def run_is_live(run_id: str) -> bool:
     pid = rec["pid"]
     if not _pid_alive(pid):
         return False
+    # Strongest reuse guard: process start time. It survives PID reuse even by
+    # a second scan with identical argv (which defeats the cmdline check). When
+    # both the stored and the live start time are available, the comparison is
+    # conclusive either way.
+    stored_start = rec.get("starttime")
+    if isinstance(stored_start, int):
+        current_start = _proc_starttime(pid)
+        if current_start is not None:
+            return current_start == stored_start
+        # start time unreadable — fall through to the cmdline guard
     stored = rec.get("cmdline")
     if not isinstance(stored, list):
         return True  # legacy/degraded record — can't apply the guard

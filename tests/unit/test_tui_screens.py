@@ -641,7 +641,7 @@ async def test_runs_screen_shows_live_marker(
 
 
 @pytest.mark.asyncio
-async def test_run_detail_stale_banner_and_stops_polling(
+async def test_run_detail_stale_banner_keeps_polling(
     seeded_db: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from flosswing import runpid
@@ -660,7 +660,23 @@ async def test_run_detail_stale_banner_and_stops_polling(
 
         banner = app.screen.query_one("#liveness-banner", Static)
         assert "stopped" in str(banner.content).lower()
-        # A stale run never changes -> polling must stop.
+        # 'stale' can be a false/transient reading (e.g. a PID-file write that
+        # hasn't landed yet); polling must keep running so the view self-heals
+        # rather than freezing forever. Only a terminal DB status stops it.
+        assert screen._poll is not None
+
+
+@pytest.mark.asyncio
+async def test_run_detail_stops_polling_when_terminal(seeded_db: str) -> None:
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+
+    # seeded_db's run is 'completed' (terminal) -> poll must stop.
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = RunDetailScreen(seeded_db)
+        app.push_screen(screen)
+        await pilot.pause()
         assert screen._poll is None
 
 
@@ -699,3 +715,66 @@ async def test_run_detail_recent_activity_panel(seeded_db: str) -> None:
         panel = app.screen.query_one("#recent-activity", Static)
         # The seeded run has one 'hunt' agent session.
         assert "hunt" in str(panel.content).lower()
+
+
+def test_format_elapsed_naive_timestamp_never_raises() -> None:
+    """_format_elapsed must never raise into the poll — a timezone-naive
+    started_at (no trailing 'Z') would make now(UTC)-naive raise TypeError."""
+    from flosswing.tui.screens.runs import _format_elapsed
+
+    assert _format_elapsed("2026-06-15T00:00:00") == ""  # naive -> swallowed
+    assert _format_elapsed("not-a-timestamp") == ""
+
+
+@pytest.mark.asyncio
+async def test_runs_screen_stale_run_has_empty_elapsed(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale (crashed) run must not show an ever-growing Elapsed value."""
+    from rich.style import Style
+
+    from flosswing import runpid
+
+    _add_running_run("01JTESTRUN0000000000000013")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#runs-table", DataTable)
+        # Find the stale run's row and render its Elapsed column (index 7).
+        rendered = ""
+        for row in range(table.row_count):
+            key = table.coordinate_to_cell_key((row, 0)).row_key.value
+            if key == "01JTESTRUN0000000000000013":
+                lines = table._render_cell(row, 7, Style(), width=10)
+                rendered = "".join(seg.text for line in lines for seg in line)
+        assert rendered.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_runs_screen_live_run_shows_elapsed(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rich.style import Style
+
+    from flosswing import runpid
+
+    _add_running_run("01JTESTRUN0000000000000014")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#runs-table", DataTable)
+        rendered = ""
+        for row in range(table.row_count):
+            key = table.coordinate_to_cell_key((row, 0)).row_key.value
+            if key == "01JTESTRUN0000000000000014":
+                lines = table._render_cell(row, 7, Style(), width=10)
+                rendered = "".join(seg.text for line in lines for seg in line)
+        assert rendered.strip() != ""  # live run shows an elapsed value

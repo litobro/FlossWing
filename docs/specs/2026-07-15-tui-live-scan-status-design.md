@@ -59,25 +59,34 @@ def read_pid(run_id: str) -> int | None:      # None if absent/corrupt
 def run_is_live(run_id: str) -> bool:         # read_pid() and _pid_is_flosswing(pid)
 ```
 
-Liveness check `_pid_is_flosswing(pid)`:
+Liveness check (`run_is_live`):
 
-- `os.kill(pid, 0)` → `ProcessLookupError` means dead → not live.
-- If the process exists, guard against PID reuse: on Linux, read `/proc/<pid>/cmdline` and
-  require it to contain `b"flosswing"`. If `/proc` is unavailable (non-Linux), skip the
-  cmdline check and treat existence as live (documented small reuse risk on those
-  platforms).
-- `PermissionError` from `os.kill` (process exists but owned by another user) is resolved
-  by the cmdline check; without `/proc` it is treated as not-flosswing (not live).
+- `os.kill(pid, 0)` → `ProcessLookupError` means dead → not live. `PermissionError`
+  (process exists but owned by another user) counts as existing.
+- PID-reuse guard, strongest first:
+  - **Process start time** — the record stores the writer's `/proc/<pid>/stat` start time
+    (clock ticks since boot). When both the stored and the live start time are available,
+    the comparison is conclusive: it distinguishes a reused PID from the original instance
+    even when the two processes share byte-identical argv (which two `flosswing scan <same
+    repo>` invocations do).
+  - **Command line** — fallback when the start time can't be read (non-Linux, or a legacy
+    record predating the field): the live `/proc/<pid>/cmdline` must equal the stored one.
+  - When neither guard can be applied, plain liveness is trusted (documented small reuse
+    risk off-Linux).
 
 The PID file contains only a PID and an ISO timestamp — no credentials, no repo contents.
 
 ### 2. Orchestrator wiring
 
-In `run_scan`, immediately after `_ensure_run_dir(run_id)` and inserting the `Run` row:
+In `run_scan`, immediately after `_ensure_run_dir(run_id)` and **before** inserting the
+`Run` row (so there is never a committed `running` row without a live PID file, which the
+TUI would misread as `stale`):
 
 ```python
 runpid.write_pid_file(run_id)
 try:
+    with st_session.session_scope() as s:
+        s.add(Run(..., status="running", ...))
     ...  # the entire existing Recon -> ... -> Report pipeline body, unchanged
     return ScanResult(...)
 finally:
@@ -136,8 +145,11 @@ Columns become: **Run · Repo · Status · Live · Stage · Findings · Tokens �
 - **Stage** — `active_stage or ""` (populated for all running rows, live or
   stale; for a stale row it shows the stage the scan was in when it died).
 - **Tokens** — `tokens_used` (thousands-separated).
-- **Elapsed** — computed in-screen from `started_at` for running rows (`live` and `stale`);
-  a stale row's elapsed shows how long it has been stuck. `""` for terminal rows.
+- **Elapsed** — computed in-screen from `started_at` for **live** rows only. A stale
+  (crashed) run keeps DB status `running`, so gating on status would grow its elapsed
+  unbounded and present a dead scan as if still working; `""` for stale and terminal rows.
+  `_format_elapsed` swallows any parse/`TypeError` (e.g. a timezone-naive timestamp) so it
+  can never raise into the 2s poll.
 
 A stale row keeps its DB `Status` text (`running`) — truth is not rewritten — but the `⚠`
 Live glyph and the elapsed value make it obvious the process is gone.
@@ -152,8 +164,13 @@ Live glyph and the elapsed value make it obvious the process is gone.
   each line `stage · outcome · in/out tokens · $cost`, with any refusal/error text shown
   scrubbed and rendered literally. This is the DB-derived live feed; it grows as stages
   finish. The full session list stays reachable on `s` (existing `SessionsScreen`).
-- **Polling**: stop the 2s poll when the run is terminal (existing behaviour) **or** stale
-  — a stale run will not change, so continuing to poll is wasted work.
+- **Polling**: stop the 2s poll only when the run reaches a terminal DB status. It does
+  **not** stop on `stale`: a stale reading can be false/transient (e.g. a PID-file write
+  that hasn't landed, or a momentary read failure), and the interval is armed only in
+  `on_mount`, so stopping there would freeze the view for the rest of a still-running scan
+  with no way to recover. Continuing to poll lets a false-stale view self-heal; for a
+  genuinely crashed run the rows simply never change (cheap, and matches the pre-existing
+  behaviour for any running row).
 
 ## Data flow
 

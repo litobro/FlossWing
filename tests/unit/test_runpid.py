@@ -119,3 +119,45 @@ def test_alive_pid_without_stored_cmdline_trusts_liveness() -> None:
     # Legacy/degraded record with no cmdline: fall back to existence only.
     _write_record("nocmd", {"pid": os.getpid(), "created_at": "x"})
     assert runpid.run_is_live("nocmd") is True
+
+
+@pytest.mark.skipif(not _HAVE_PROC, reason="needs /proc for starttime reuse guard")
+def test_write_records_starttime() -> None:
+    runpid.write_pid_file("st")
+    import json as _json
+
+    rec = _json.loads(runpid.run_pid_path("st").read_text())
+    assert isinstance(rec.get("starttime"), int)
+
+
+@pytest.mark.skipif(not _HAVE_PROC, reason="needs /proc for starttime reuse guard")
+def test_alive_pid_with_mismatched_starttime_is_not_live() -> None:
+    # Same live pid and matching argv, but a different process *instance*
+    # (simulated via a wrong starttime): a reused PID running an identical
+    # command line must NOT be reported live.
+    cmd = runpid._proc_cmdline(os.getpid())
+    _write_record(
+        "reuse-st",
+        {
+            "pid": os.getpid(),
+            "created_at": "x",
+            "cmdline": cmd,
+            "starttime": 1,  # cannot match our real starttime
+        },
+    )
+    assert runpid.run_is_live("reuse-st") is False
+
+
+@pytest.mark.skipif(not _HAVE_PROC, reason="needs /proc for starttime reuse guard")
+def test_matching_starttime_is_live() -> None:
+    # A full, self-consistent record (pid + cmdline + real starttime) is live.
+    runpid.write_pid_file("st-ok")
+    assert runpid.run_is_live("st-ok") is True
+
+
+def test_record_without_starttime_still_trusts_cmdline() -> None:
+    # Legacy record predating the starttime field: fall back to the cmdline
+    # guard (or plain liveness) rather than rejecting outright.
+    cmd = runpid._proc_cmdline(os.getpid())
+    _write_record("legacy-st", {"pid": os.getpid(), "created_at": "x", "cmdline": cmd})
+    assert runpid.run_is_live("legacy-st") is True

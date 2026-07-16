@@ -124,24 +124,27 @@ async def run_scan(cfg: Config) -> ScanResult:
     run_id = str(ULID())
     _ensure_run_dir(run_id)
 
-    with st_session.session_scope() as s:
-        s.add(
-            Run(
-                id=run_id,
-                target_repo_path=str(cfg.repo_root.resolve()),
-                target_repo_sha=_git_sha(cfg.repo_root),
-                depth="standard",
-                budget_total=20,
-                budget_used=0,
-                started_at=_now_iso(),
-                status="running",
-                config_json=_config_for_run_row(cfg),
-                flosswing_version=__version__,
-            )
-        )
-
+    # Write the liveness marker BEFORE committing the Run row, so the TUI can
+    # never observe a 'running' row that has no live PID (which it would read
+    # as a false 'stale'/crashed). The finally below clears it on every exit.
     runpid.write_pid_file(run_id)
     try:
+        with st_session.session_scope() as s:
+            s.add(
+                Run(
+                    id=run_id,
+                    target_repo_path=str(cfg.repo_root.resolve()),
+                    target_repo_sha=_git_sha(cfg.repo_root),
+                    depth="standard",
+                    budget_total=20,
+                    budget_used=0,
+                    started_at=_now_iso(),
+                    status="running",
+                    config_json=_config_for_run_row(cfg),
+                    flosswing_version=__version__,
+                )
+            )
+
         recon_result = await recon_stage.run(run_id=run_id, cfg=cfg)
 
         # Hunt runs only if Recon completed AND queued >=1 task.
