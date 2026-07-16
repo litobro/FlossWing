@@ -31,8 +31,10 @@ from flosswing import errors
 from flosswing.tui import data
 
 # Live-status glyphs. Kept as a named map so tests and the header stay in sync.
-_LIVE_GLYPH = {"live": "●", "stale": "⚠", "done": "·"}
-_LIVE_STYLE = {"live": "green", "stale": "yellow", "done": "dim"}
+# 'unknown' = a running row with no usable PID file: we can't confirm liveness,
+# so it gets a neutral marker rather than the alarming 'stale' warning.
+_LIVE_GLYPH = {"live": "●", "stale": "⚠", "unknown": "?", "done": "·"}
+_LIVE_STYLE = {"live": "green", "stale": "yellow", "unknown": "dim", "done": "dim"}
 
 
 def _format_elapsed(started_at: str) -> str:
