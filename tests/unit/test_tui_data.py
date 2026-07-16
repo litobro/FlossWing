@@ -300,15 +300,33 @@ def test_list_runs_liveness_live_when_pid_alive(
     assert row.liveness == "live"
 
 
-def test_list_runs_liveness_stale_when_pid_dead(
+def test_list_runs_liveness_stale_when_pid_recorded_but_dead(
     isolated_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from flosswing import runpid
 
     _add_run("run-dead", status="running")
+    # A PID file exists (read_pid returns a pid) but the process is gone:
+    # this is a genuine crash -> 'stale'.
     monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    monkeypatch.setattr(runpid, "read_pid", lambda rid: 4242)
     row = {r.id: r for r in data.list_runs()}["run-dead"]
     assert row.liveness == "stale"
+
+
+def test_list_runs_liveness_unknown_when_no_pid_file(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+
+    _add_run("run-nopid", status="running")
+    # No PID file at all (e.g. a scan started before liveness tracking, an
+    # older build, or a swallowed write failure). We cannot conclude 'crashed'
+    # -> 'unknown', not 'stale'.
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    monkeypatch.setattr(runpid, "read_pid", lambda rid: None)
+    row = {r.id: r for r in data.list_runs()}["run-nopid"]
+    assert row.liveness == "unknown"
 
 
 def test_list_runs_liveness_done_for_terminal_status(

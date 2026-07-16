@@ -600,7 +600,9 @@ async def test_runs_screen_shows_stale_marker(
     from flosswing.tui.screens.runs import _LIVE_GLYPH
 
     _add_running_run("01JTESTRUN0000000000000009")
+    # A recorded-but-dead PID = a genuine crash -> stale marker.
     monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    monkeypatch.setattr(runpid, "read_pid", lambda rid: 4242)
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -613,6 +615,36 @@ async def test_runs_screen_shows_stale_marker(
             lines = table._render_cell(row, 3, Style(), width=6)  # Live column
             rendered += "".join(seg.text for line in lines for seg in line)
         assert _LIVE_GLYPH["stale"] in rendered
+
+
+@pytest.mark.asyncio
+async def test_runs_screen_shows_unknown_marker_not_stale(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rich.style import Style
+
+    from flosswing import runpid
+    from flosswing.tui.screens.runs import _LIVE_GLYPH
+
+    _add_running_run("01JTESTRUN000000000000000U")
+    # Running row with NO PID file -> 'unknown', never the 'stale' warning.
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    monkeypatch.setattr(runpid, "read_pid", lambda rid: None)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#runs-table", DataTable)
+        rendered = ""
+        for row in range(table.row_count):
+            key = table.coordinate_to_cell_key((row, 0)).row_key.value
+            if key == "01JTESTRUN000000000000000U":
+                lines = table._render_cell(row, 3, Style(), width=6)
+                rendered = "".join(seg.text for line in lines for seg in line)
+        assert _LIVE_GLYPH["unknown"] in rendered
+        assert _LIVE_GLYPH["stale"] not in rendered
 
 
 @pytest.mark.asyncio
@@ -648,7 +680,9 @@ async def test_run_detail_stale_banner_keeps_polling(
     from flosswing.tui.screens.run_detail import RunDetailScreen
 
     _add_running_run("01JTESTRUN0000000000000011")
+    # Recorded-but-dead PID -> genuine crash -> the 'stopped' banner.
     monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    monkeypatch.setattr(runpid, "read_pid", lambda rid: 4242)
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -663,6 +697,34 @@ async def test_run_detail_stale_banner_keeps_polling(
         # 'stale' can be a false/transient reading (e.g. a PID-file write that
         # hasn't landed yet); polling must keep running so the view self-heals
         # rather than freezing forever. Only a terminal DB status stops it.
+        assert screen._poll is not None
+
+
+@pytest.mark.asyncio
+async def test_run_detail_unknown_banner_not_a_crash_claim(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+
+    _add_running_run("01JTESTRUN000000000000001U")
+    # No PID file: an actively-running scan that predates liveness tracking
+    # must NOT be told it crashed.
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    monkeypatch.setattr(runpid, "read_pid", lambda rid: None)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = RunDetailScreen("01JTESTRUN000000000000001U")
+        app.push_screen(screen)
+        await pilot.pause()
+        from textual.widgets import Static
+
+        banner = str(app.screen.query_one("#liveness-banner", Static).content).lower()
+        assert "unknown" in banner
+        assert "crashed" not in banner and "killed" not in banner
+        # Still running as far as the DB knows -> keep polling.
         assert screen._poll is not None
 
 

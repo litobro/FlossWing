@@ -111,11 +111,20 @@ class RunDetailScreen(Screen[None]):
             self._poll = None
 
     def _banner_text(self, p: data.RunProgress) -> Text:
-        """Liveness banner: empty for terminal runs, live/stale for running."""
+        """Liveness banner: empty for terminal runs; live/unknown/stale while
+        running. 'unknown' (no PID file) is NOT presented as a crash — only a
+        recorded-but-dead PID earns the 'stopped/crashed' wording."""
         if p.status != "running":
             return Text("")
         if p.liveness == "live":
             return Text(f"{_LIVE_GLYPH['live']} live", style="green")
+        if p.liveness == "unknown":
+            return Text(
+                f"{_LIVE_GLYPH['unknown']} liveness unknown — no PID file for this "
+                "run (it may predate liveness tracking or was started by another "
+                "build). The state DB still shows 'running'.",
+                style="dim",
+            )
         return Text(
             f"{_LIVE_GLYPH['stale']} process not found — the scan appears to have "
             "stopped (crashed or killed); the state DB still shows 'running'. "

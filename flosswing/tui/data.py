@@ -59,13 +59,25 @@ def _liveness(run_id: str, status: str) -> str:
     """Reconcile a run's DB status against real process liveness.
 
     Display-only: the TUI never writes a corrected status back (that would
-    race a still-alive run). Returns 'done' for any terminal status, else
-    'live' if the run's PID file points at a live flosswing process, else
-    'stale' (the row says 'running' but the process is gone — crashed/killed).
+    race a still-alive run). Returns, for a 'running' row:
+
+    - 'live'    — the PID file points at a live flosswing process.
+    - 'stale'   — a PID file exists but its process is gone: a genuine crash.
+    - 'unknown' — no usable PID file at all. We cannot conclude the run
+                  crashed: it may predate liveness tracking, have been started
+                  by another build, or the write may have failed. Absence of
+                  evidence is not evidence of death.
+
+    Any terminal status returns 'done'.
     """
     if status != "running":
         return "done"
-    return "live" if runpid.run_is_live(run_id) else "stale"
+    if runpid.run_is_live(run_id):
+        return "live"
+    # Not live: distinguish a recorded-but-dead PID (crash) from no record.
+    if runpid.read_pid(run_id) is None:
+        return "unknown"
+    return "stale"
 
 
 @dataclass(frozen=True)

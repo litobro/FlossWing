@@ -110,13 +110,23 @@ Classification helper (module-level, uses `runpid`):
 ```python
 def _liveness(run_id: str, status: str) -> str:
     if status != "running":
-        return "done"           # terminal (completed | errored)
-    return "live" if runpid.run_is_live(run_id) else "stale"
+        return "done"            # terminal (completed | errored)
+    if runpid.run_is_live(run_id):
+        return "live"
+    if runpid.read_pid(run_id) is None:
+        return "unknown"         # no usable PID file — can't conclude crashed
+    return "stale"               # PID file present but its process is dead
 ```
+
+The `unknown` state matters: a `running` row with **no** PID file is not proof of a crash.
+It may predate liveness tracking (a scan already running across the upgrade), have been
+started by another build, or have hit a swallowed write failure. Only a PID file whose
+recorded process is actually dead earns `stale` (and the alarming "crashed or killed"
+banner). `unknown` gets a neutral marker and an honest "liveness unknown" message.
 
 `RunRow` gains three fields:
 
-- `liveness: str`  — `"live" | "stale" | "done"`.
+- `liveness: str`  — `"live" | "stale" | "unknown" | "done"`.
 - `tokens_used: int` — one grouped `sum(input+output)` over `agent_sessions` for all runs
   (same pattern as the existing findings-count group-by; one query, not N).
 - `active_stage: str | None` — the name of the currently-active stage for running rows,
@@ -140,10 +150,10 @@ untrusted repo-derived strings (repo path, attack class, scope hint).
 
 Columns become: **Run · Repo · Status · Live · Stage · Findings · Tokens · Elapsed · Started**.
 
-- **Live** — a glyph: `●` live (green), `⚠` stale (yellow), `·` done. Rendered as styled
-  `Text` so it can't be interpreted as markup.
-- **Stage** — `active_stage or ""` (populated for all running rows, live or
-  stale; for a stale row it shows the stage the scan was in when it died).
+- **Live** — a glyph: `●` live (green), `⚠` stale (yellow), `?` unknown (dim), `·` done.
+  Rendered as styled `Text` so it can't be interpreted as markup.
+- **Stage** — `active_stage or ""` (populated for all running rows regardless of liveness;
+  for a stale row it shows the stage the scan was in when it died).
 - **Tokens** — `tokens_used` (thousands-separated).
 - **Elapsed** — computed in-screen from `started_at` for **live** rows only. A stale
   (crashed) run keeps DB status `running`, so gating on status would grow its elapsed
@@ -158,6 +168,9 @@ Live glyph and the elapsed value make it obvious the process is gone.
 
 - **Liveness banner** (new `Static`), shown when `status == "running"`:
   - live → `● live` (optionally with the pid).
+  - unknown → `? liveness unknown — no PID file for this run (it may predate liveness
+    tracking or was started by another build); the DB still shows 'running'.` No crash
+    claim, no "re-run" advice.
   - stale → `⚠ process not found — the scan appears to have stopped (crashed or killed);
     the DB still shows 'running'. Re-run the scan or 'flosswing report <id>' to recover.`
 - **Recent activity panel** (new): the tail (last ~5) of `data.list_sessions(run_id)` —
@@ -182,7 +195,7 @@ run_scan(run_id)                      runs list / run detail (poll 2s)
   insert Run(status=running)              -> runpid.run_is_live(run_id)
   runpid.write_pid_file  --------------->    reads ~/.flosswing/runs/<id>/run.pid
   ... pipeline ...                           os.kill(pid,0) + /proc cmdline
-  update Run(status=final)                 -> "live" | "stale" | "done"
+  update Run(status=final)                 -> "live" | "stale" | "unknown" | "done"
   finally: runpid.clear_pid_file
 ```
 
