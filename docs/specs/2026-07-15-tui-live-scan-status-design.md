@@ -84,20 +84,28 @@ TUI would misread as `stale`):
 
 ```python
 runpid.write_pid_file(run_id)
+finished_cleanly = False
 try:
     with st_session.session_scope() as s:
         s.add(Run(..., status="running", ...))
     ...  # the entire existing Recon -> ... -> Report pipeline body, unchanged
+    finished_cleanly = True          # run row is now finalized to a terminal status
     return ScanResult(...)
 finally:
-    runpid.clear_pid_file(run_id)
+    if finished_cleanly:
+        runpid.clear_pid_file(run_id)
 ```
 
-- Normal completion **and** a Python exception both clear the file (the `finally`).
-- `SIGKILL` / power loss leaves the file behind; the TUI's `os.kill` liveness check then
-  reports the run as stale. That is the intended fallback.
-- `ScanResult` and all existing behaviour are unchanged. This is the only edit to
-  `orchestrator.py`.
+- The PID file is cleared **only on clean completion** — never in an unconditional
+  `finally`. This is load-bearing for the `stale`/`unknown` split:
+  - **Clean finish** → status is terminal, PID file cleared → `done`.
+  - **Crash (unhandled exception)** → the run row is left `running` (finalization never
+    runs) and the PID file is deliberately **left in place**, pointing at a now-dead pid →
+    the TUI reads `stale` (the crash warning). Clearing here — as an earlier draft did in a
+    `finally` — would erase the only crash evidence and mislabel the common crash path as
+    the benign `unknown`.
+  - **`SIGKILL` / power loss** → `finally` doesn't run, PID file remains → `stale`.
+- `ScanResult` and all existing behaviour are otherwise unchanged.
 
 ### 3. TUI read layer (`tui/data.py`) — display-only reconciliation
 
@@ -105,18 +113,20 @@ The TUI stays **read-only** with respect to the DB (the module's stated invarian
 *annotates* liveness; it never writes corrected status back (writing would risk racing a
 still-alive run).
 
-Classification helper (module-level, uses `runpid`):
+Classification helper (module-level). `runpid.liveness()` classifies the run from a
+**single** PID-file read — `"live"` / `"dead"` / `"absent"` — which the TUI maps to its
+display vocabulary:
 
 ```python
 def _liveness(run_id: str, status: str) -> str:
     if status != "running":
         return "done"            # terminal (completed | errored)
-    if runpid.run_is_live(run_id):
-        return "live"
-    if runpid.read_pid(run_id) is None:
-        return "unknown"         # no usable PID file — can't conclude crashed
-    return "stale"               # PID file present but its process is dead
+    return {"live": "live", "dead": "stale", "absent": "unknown"}[
+        runpid.liveness(run_id)
+    ]
 ```
+
+(`runpid.run_is_live()` is retained as a thin `liveness(run_id) == "live"` wrapper.)
 
 The `unknown` state matters: a `running` row with **no** PID file is not proof of a crash.
 It may predate liveness tracking (a scan already running across the upgrade), have been

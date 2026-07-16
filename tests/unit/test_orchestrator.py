@@ -1281,13 +1281,21 @@ def test_pid_file_present_during_run_and_cleared_after(
     assert not runpid.run_pid_path(str(seen["run_id"])).exists()
 
 
-def test_pid_file_cleared_when_a_stage_raises(
+def test_pid_file_retained_when_a_stage_raises(
     fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """On a crash (unhandled exception), the PID file must be LEFT in place.
+
+    The run row stays status='running' (finalization never runs), so the PID
+    file — pointing at a now-dead pid — is what lets the TUI read the run as
+    'stale' (crashed) rather than the benign 'unknown' it would show if the
+    file had been cleared. Only a clean completion clears the marker.
+    """
     import dataclasses
 
     from flosswing import orchestrator, runpid
     from flosswing.stages import recon as recon_stage
+    from flosswing.state.models import Run
 
     monkeypatch.setenv("HOME", str(tmp_path))
 
@@ -1302,8 +1310,11 @@ def test_pid_file_cleared_when_a_stage_raises(
     cfg = dataclasses.replace(_cfg(tmp_path), auto_render=False)
     with pytest.raises(RuntimeError, match="kaboom"):
         asyncio.run(orchestrator.run_scan(cfg))
-    # The finally-clause must clear the marker even on an exception path.
-    assert not runpid.run_pid_path(seen["run_id"]).exists()
+    rid = seen["run_id"]
+    # PID file retained (dead pid) + row still 'running' => TUI reads 'stale'.
+    assert runpid.run_pid_path(rid).exists()
+    with st_session.session_scope() as s:
+        assert s.get(Run, rid).status == "running"
 
 
 def test_pid_file_written_before_run_row_committed(

@@ -72,12 +72,10 @@ def _liveness(run_id: str, status: str) -> str:
     """
     if status != "running":
         return "done"
-    if runpid.run_is_live(run_id):
-        return "live"
-    # Not live: distinguish a recorded-but-dead PID (crash) from no record.
-    if runpid.read_pid(run_id) is None:
-        return "unknown"
-    return "stale"
+    # One PID-file read classifies all three running cases.
+    return {"live": "live", "dead": "stale", "absent": "unknown"}[
+        runpid.liveness(run_id)
+    ]
 
 
 @dataclass(frozen=True)
@@ -89,7 +87,7 @@ class RunRow:
     started_at: str
     finished_at: str | None
     findings_count: int
-    liveness: str  # "live" | "stale" | "done"
+    liveness: str  # "live" | "stale" | "unknown" | "done"
     tokens_used: int
     active_stage: str | None  # derived stage name for running rows, else None
 
@@ -204,7 +202,7 @@ class RunProgress:
     short_id: str
     target_repo_path: str
     status: str
-    liveness: str  # "live" | "stale" | "done"
+    liveness: str  # "live" | "stale" | "unknown" | "done"
     started_at: str
     finished_at: str | None
     stages: list[StageState]

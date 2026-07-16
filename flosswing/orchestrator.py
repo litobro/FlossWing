@@ -126,8 +126,11 @@ async def run_scan(cfg: Config) -> ScanResult:
 
     # Write the liveness marker BEFORE committing the Run row, so the TUI can
     # never observe a 'running' row that has no live PID (which it would read
-    # as a false 'stale'/crashed). The finally below clears it on every exit.
+    # as a false 'stale'/crashed). It is cleared only on clean completion (see
+    # the finally below) — a crash intentionally leaves it so the run reads
+    # 'stale'.
     runpid.write_pid_file(run_id)
+    finished_cleanly = False
     try:
         with st_session.session_scope() as s:
             s.add(
@@ -593,8 +596,16 @@ async def run_scan(cfg: Config) -> ScanResult:
                 "  index_build_empty: no symbols extracted; Hunt did not start"
             )
 
+        # Clear the marker ONLY on clean completion (the run row is now
+        # finalized to a terminal status). If the pipeline raised, we fall
+        # through the finally WITHOUT clearing, deliberately leaving the PID
+        # file in place: the row stays 'running' with a now-dead pid, which is
+        # what lets the TUI read a crashed run as 'stale' rather than the benign
+        # 'unknown' shown when no PID file was ever written.
+        finished_cleanly = True
         return ScanResult(
             run_id=run_id, exit_code=exit_code, summary="\n".join(summary_lines)
         )
     finally:
-        runpid.clear_pid_file(run_id)
+        if finished_cleanly:
+            runpid.clear_pid_file(run_id)

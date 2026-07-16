@@ -162,20 +162,26 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def run_is_live(run_id: str) -> bool:
-    """True iff ``run_id``'s recorded process is still running.
+def liveness(run_id: str) -> str:
+    """Classify ``run_id`` from a single PID-file read.
 
-    Guards against PID reuse: if the record stored the writer's command line
-    and ``/proc`` is available, the live process's command line must match.
-    When that comparison can't be made (no ``/proc``, or no stored cmdline),
-    plain liveness is trusted.
+    Returns one of:
+
+    - ``"absent"`` — no usable PID file (never written, or corrupt).
+    - ``"dead"``   — a PID file exists but its recorded process is gone.
+    - ``"live"``   — the recorded process is still running.
+
+    Guards against PID reuse: if the record stored the writer's start time (or,
+    failing that, its command line) and ``/proc`` is available, the live
+    process must match. When neither comparison can be made (no ``/proc``, or a
+    legacy record), plain liveness is trusted.
     """
     rec = _read_record(run_id)
     if rec is None:
-        return False
+        return "absent"
     pid = rec["pid"]
     if not _pid_alive(pid):
-        return False
+        return "dead"
     # Strongest reuse guard: process start time. It survives PID reuse even by
     # a second scan with identical argv (which defeats the cmdline check). When
     # both the stored and the live start time are available, the comparison is
@@ -184,12 +190,17 @@ def run_is_live(run_id: str) -> bool:
     if isinstance(stored_start, int):
         current_start = _proc_starttime(pid)
         if current_start is not None:
-            return current_start == stored_start
+            return "live" if current_start == stored_start else "dead"
         # start time unreadable — fall through to the cmdline guard
     stored = rec.get("cmdline")
     if not isinstance(stored, list):
-        return True  # legacy/degraded record — can't apply the guard
+        return "live"  # legacy/degraded record — can't apply the guard
     current = _proc_cmdline(pid)
     if current is None:
-        return True  # no /proc (non-Linux) — can't apply the guard
-    return current == stored
+        return "live"  # no /proc (non-Linux) — can't apply the guard
+    return "live" if current == stored else "dead"
+
+
+def run_is_live(run_id: str) -> bool:
+    """True iff ``run_id``'s recorded process is still running."""
+    return liveness(run_id) == "live"

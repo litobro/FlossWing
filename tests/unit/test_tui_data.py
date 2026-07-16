@@ -295,7 +295,7 @@ def test_list_runs_liveness_live_when_pid_alive(
     from flosswing import runpid
 
     _add_run("run-live", status="running")
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: rid == "run-live")
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live" if rid == "run-live" else "absent")
     row = {r.id: r for r in data.list_runs()}["run-live"]
     assert row.liveness == "live"
 
@@ -308,8 +308,7 @@ def test_list_runs_liveness_stale_when_pid_recorded_but_dead(
     _add_run("run-dead", status="running")
     # A PID file exists (read_pid returns a pid) but the process is gone:
     # this is a genuine crash -> 'stale'.
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
-    monkeypatch.setattr(runpid, "read_pid", lambda rid: 4242)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "dead")
     row = {r.id: r for r in data.list_runs()}["run-dead"]
     assert row.liveness == "stale"
 
@@ -323,8 +322,7 @@ def test_list_runs_liveness_unknown_when_no_pid_file(
     # No PID file at all (e.g. a scan started before liveness tracking, an
     # older build, or a swallowed write failure). We cannot conclude 'crashed'
     # -> 'unknown', not 'stale'.
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
-    monkeypatch.setattr(runpid, "read_pid", lambda rid: None)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "absent")
     row = {r.id: r for r in data.list_runs()}["run-nopid"]
     assert row.liveness == "unknown"
 
@@ -336,7 +334,7 @@ def test_list_runs_liveness_done_for_terminal_status(
 
     _add_run("run-fin", status="completed")
     # Even if a stale pid file somehow lingered, terminal status wins.
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
     row = {r.id: r for r in data.list_runs()}["run-fin"]
     assert row.liveness == "done"
 
@@ -391,7 +389,7 @@ def test_run_progress_liveness_live(
     from flosswing import runpid
 
     _add_run("rp-live", status="running")
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
     p = data.run_progress("rp-live")
     assert p is not None
     assert p.liveness == "live"

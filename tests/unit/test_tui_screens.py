@@ -601,8 +601,7 @@ async def test_runs_screen_shows_stale_marker(
 
     _add_running_run("01JTESTRUN0000000000000009")
     # A recorded-but-dead PID = a genuine crash -> stale marker.
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
-    monkeypatch.setattr(runpid, "read_pid", lambda rid: 4242)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "dead")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -628,8 +627,7 @@ async def test_runs_screen_shows_unknown_marker_not_stale(
 
     _add_running_run("01JTESTRUN000000000000000U")
     # Running row with NO PID file -> 'unknown', never the 'stale' warning.
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
-    monkeypatch.setattr(runpid, "read_pid", lambda rid: None)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "absent")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -657,7 +655,7 @@ async def test_runs_screen_shows_live_marker(
     from flosswing.tui.screens.runs import _LIVE_GLYPH
 
     _add_running_run("01JTESTRUN0000000000000010")
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -681,8 +679,7 @@ async def test_run_detail_stale_banner_keeps_polling(
 
     _add_running_run("01JTESTRUN0000000000000011")
     # Recorded-but-dead PID -> genuine crash -> the 'stopped' banner.
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
-    monkeypatch.setattr(runpid, "read_pid", lambda rid: 4242)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "dead")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -710,8 +707,7 @@ async def test_run_detail_unknown_banner_not_a_crash_claim(
     _add_running_run("01JTESTRUN000000000000001U")
     # No PID file: an actively-running scan that predates liveness tracking
     # must NOT be told it crashed.
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
-    monkeypatch.setattr(runpid, "read_pid", lambda rid: None)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "absent")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -750,7 +746,7 @@ async def test_run_detail_live_banner(
     from flosswing.tui.screens.run_detail import RunDetailScreen
 
     _add_running_run("01JTESTRUN0000000000000012")
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -798,7 +794,7 @@ async def test_runs_screen_stale_run_has_empty_elapsed(
     from flosswing import runpid
 
     _add_running_run("01JTESTRUN0000000000000013")
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "dead")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:
@@ -825,7 +821,7 @@ async def test_runs_screen_live_run_shows_elapsed(
     from flosswing import runpid
 
     _add_running_run("01JTESTRUN0000000000000014")
-    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
 
     app = FlosswingTUI()
     async with app.run_test() as pilot:

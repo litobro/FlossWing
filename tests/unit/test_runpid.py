@@ -161,3 +161,27 @@ def test_record_without_starttime_still_trusts_cmdline() -> None:
     cmd = runpid._proc_cmdline(os.getpid())
     _write_record("legacy-st", {"pid": os.getpid(), "created_at": "x", "cmdline": cmd})
     assert runpid.run_is_live("legacy-st") is True
+
+
+def test_liveness_absent_when_no_file() -> None:
+    assert runpid.liveness("ghost") == "absent"
+
+
+def test_liveness_live_for_current_process() -> None:
+    runpid.write_pid_file("lv")
+    assert runpid.liveness("lv") == "live"
+
+
+def test_liveness_dead_when_recorded_pid_gone() -> None:
+    dead = 2_000_000_000
+    try:
+        os.kill(dead, 0)
+        alive = True
+    except (ProcessLookupError, OverflowError):
+        alive = False
+    except PermissionError:
+        alive = True
+    if alive:  # pragma: no cover - environment-dependent
+        pytest.skip("chosen 'dead' pid is actually alive here")
+    _write_record("lvd", {"pid": dead, "created_at": "x", "cmdline": ["python"]})
+    assert runpid.liveness("lvd") == "dead"
