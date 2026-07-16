@@ -34,6 +34,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from flosswing import runpid
 from flosswing.stages import report as report_stage
 from flosswing.state import session as st_session
 from flosswing.state.models import (
@@ -54,6 +55,19 @@ def _short_id(run_id: str) -> str:
     return run_id[-8:] if len(run_id) > 8 else run_id
 
 
+def _liveness(run_id: str, status: str) -> str:
+    """Reconcile a run's DB status against real process liveness.
+
+    Display-only: the TUI never writes a corrected status back (that would
+    race a still-alive run). Returns 'done' for any terminal status, else
+    'live' if the run's PID file points at a live flosswing process, else
+    'stale' (the row says 'running' but the process is gone — crashed/killed).
+    """
+    if status != "running":
+        return "done"
+    return "live" if runpid.run_is_live(run_id) else "stale"
+
+
 @dataclass(frozen=True)
 class RunRow:
     id: str
@@ -63,10 +77,14 @@ class RunRow:
     started_at: str
     finished_at: str | None
     findings_count: int
+    liveness: str  # "live" | "stale" | "done"
+    tokens_used: int
+    active_stage: str | None  # derived stage name for running rows, else None
 
 
 def list_runs() -> list[RunRow]:
-    """All runs, newest started_at first, with finding counts."""
+    """All runs, newest started_at first, with finding counts, live tokens,
+    liveness, and (for running rows) the derived active stage."""
     with st_session.session_scope() as s:
         counts: dict[str, int] = {
             row[0]: row[1]
@@ -74,23 +92,84 @@ def list_runs() -> list[RunRow]:
                 select(Finding.run_id, func.count(Finding.id)).group_by(Finding.run_id)
             ).all()
         }
+        token_sums: dict[str, int] = {
+            row[0]: int(row[1] or 0)
+            for row in s.execute(
+                select(
+                    AgentSession.run_id,
+                    func.coalesce(
+                        func.sum(
+                            AgentSession.input_tokens + AgentSession.output_tokens
+                        ),
+                        0,
+                    ),
+                ).group_by(AgentSession.run_id)
+            ).all()
+        }
+        # Stage-derivation evidence for the *active* stage only, gathered once
+        # via grouped/DISTINCT queries (a fixed query count regardless of run
+        # count). We collect just Recon/Index/Hunt evidence: the active stage is
+        # always one of these three, because Validate/Gapfill/Dedupe/Trace pass
+        # active_if_running=False in _derive_stages and so can never be the
+        # active stage. The post-Hunt evidence is therefore left as 0/False
+        # below — it would only affect those stages' 'done' state, which
+        # list_runs does not surface (unlike run_progress, which shows it).
+        recon_ids = {
+            row[0] for row in s.execute(select(ReconArtifact.run_id).distinct()).all()
+        }
+        index_ids = {
+            row[0] for row in s.execute(select(Symbol.run_id).distinct()).all()
+        }
+        hunt_total: dict[str, int] = {}
+        hunt_done: dict[str, int] = {}
+        for run_id, status in s.execute(
+            select(HuntTask.run_id, HuntTask.status)
+        ).all():
+            hunt_total[run_id] = hunt_total.get(run_id, 0) + 1
+            if status not in ("pending", "running"):
+                hunt_done[run_id] = hunt_done.get(run_id, 0) + 1
+
         runs = (
             s.execute(select(Run).order_by(Run.started_at.desc()))
             .scalars()
             .all()
         )
-        return [
-            RunRow(
-                id=r.id,
-                short_id=_short_id(r.id),
-                target_repo_path=r.target_repo_path,
-                status=r.status,
-                started_at=r.started_at,
-                finished_at=r.finished_at,
-                findings_count=int(counts.get(r.id, 0)),
+        rows: list[RunRow] = []
+        for r in runs:
+            active_stage: str | None = None
+            if r.status == "running":
+                # Post-Hunt evidence is passed as 0/False on purpose: those
+                # stages are never the 'active' one, so their inputs can't
+                # change which stage this extracts (see the comment above).
+                stages = _derive_stages(
+                    run_running=True,
+                    recon_done=r.id in recon_ids,
+                    index_done=r.id in index_ids,
+                    hunt_total=hunt_total.get(r.id, 0),
+                    hunt_done=hunt_done.get(r.id, 0),
+                    gapfill_done=False,
+                    n_validations=0,
+                    n_clusters=0,
+                    n_traces=0,
+                )
+                active_stage = next(
+                    (st.name for st in stages if st.state == "active"), None
+                )
+            rows.append(
+                RunRow(
+                    id=r.id,
+                    short_id=_short_id(r.id),
+                    target_repo_path=r.target_repo_path,
+                    status=r.status,
+                    started_at=r.started_at,
+                    finished_at=r.finished_at,
+                    findings_count=int(counts.get(r.id, 0)),
+                    liveness=_liveness(r.id, r.status),
+                    tokens_used=int(token_sums.get(r.id, 0)),
+                    active_stage=active_stage,
+                )
             )
-            for r in runs
-        ]
+        return rows
 
 
 @dataclass(frozen=True)
@@ -113,6 +192,7 @@ class RunProgress:
     short_id: str
     target_repo_path: str
     status: str
+    liveness: str  # "live" | "stale" | "done"
     started_at: str
     finished_at: str | None
     stages: list[StageState]
@@ -284,6 +364,7 @@ def run_progress(run_id: str) -> RunProgress | None:
             short_id=_short_id(run.id),
             target_repo_path=run.target_repo_path,
             status=run.status,
+            liveness=_liveness(run.id, run.status),
             started_at=run.started_at,
             finished_at=run.finished_at,
             stages=stages,

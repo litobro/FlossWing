@@ -28,6 +28,7 @@ from textual.timer import Timer
 from textual.widgets import DataTable, Footer, Header, Static
 
 from flosswing.tui import data
+from flosswing.tui.screens.runs import _LIVE_GLYPH
 
 _GLYPH = {"done": "✓", "active": "▶", "pending": "…", "n/a": "·"}
 # Must stay in sync with the state values emitted by data._derive_stages;
@@ -48,8 +49,10 @@ class RunDetailScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Static("", id="liveness-banner")
         yield Static("", id="stage-strip")
         yield Static("", id="run-meta")
+        yield Static("", id="recent-activity")
         yield DataTable(id="hunt-table", cursor_type="row")
         yield Footer()
 
@@ -61,13 +64,18 @@ class RunDetailScreen(Screen[None]):
 
     def refresh_view(self) -> None:
         p = data.run_progress(self._run_id)
+        banner = self.query_one("#liveness-banner", Static)
         strip = self.query_one("#stage-strip", Static)
         meta = self.query_one("#run-meta", Static)
+        activity = self.query_one("#recent-activity", Static)
         if p is None:
+            banner.update("")
             strip.update("run not found")
             meta.update("")
+            activity.update("")
             return
         self.sub_title = f"{p.short_id}  {p.target_repo_path}  [{p.status}]"
+        banner.update(self._banner_text(p))
         strip.update(
             "  ".join(f"{_GLYPH.get(st.state, '?')} {st.name}" for st in p.stages)
         )
@@ -77,6 +85,7 @@ class RunDetailScreen(Screen[None]):
             f"tokens {p.tokens_used:,}   "
             f"cost ${p.cost_usd:.2f}"
         )
+        activity.update(self._activity_text())
         table = self.query_one("#hunt-table", DataTable)
         cursor = table.cursor_row
         table.clear()
@@ -92,9 +101,50 @@ class RunDetailScreen(Screen[None]):
             )
         if p.hunt_tasks and 0 <= cursor < len(p.hunt_tasks):
             table.move_cursor(row=cursor)
+        # Stop polling only once the run reaches a terminal DB status. We do
+        # NOT stop on 'stale': a stale reading can be false/transient (e.g. the
+        # PID file hasn't been written yet, or a momentary read failure), and
+        # the interval is armed only in on_mount — stopping here would freeze
+        # the view for the rest of a still-running scan with no way to recover.
         if p.status != "running" and self._poll is not None:
             self._poll.stop()
             self._poll = None
+
+    def _banner_text(self, p: data.RunProgress) -> Text:
+        """Liveness banner: empty for terminal runs, live/stale for running."""
+        if p.status != "running":
+            return Text("")
+        if p.liveness == "live":
+            return Text(f"{_LIVE_GLYPH['live']} live", style="green")
+        return Text(
+            f"{_LIVE_GLYPH['stale']} process not found — the scan appears to have "
+            "stopped (crashed or killed); the state DB still shows 'running'. "
+            f"Re-run the scan or 'flosswing report {p.short_id}' to recover.",
+            style="yellow",
+        )
+
+    def _activity_text(self) -> Text:
+        """Tail of the agent-session feed — the DB-derived 'what happened' view.
+
+        Sessions land as each stage/task finishes, so this grows live. Rendered
+        as literal Text: refusal/error snippets are credential-scrubbed upstream
+        but may still contain markup-like characters.
+        """
+        sessions = data.list_sessions(self._run_id)
+        if not sessions:
+            return Text("no agent activity yet")
+        lines: list[str] = []
+        for sr in sessions[-5:]:
+            line = (
+                f"{sr.stage}  {sr.outcome}  "
+                f"{sr.input_tokens:,}/{sr.output_tokens:,} tok  ${sr.cost_usd:.2f}"
+            )
+            extra = sr.refusal_text or sr.error_text
+            if extra:
+                snippet = extra if len(extra) <= 80 else extra[:77] + "…"
+                line += f"  — {snippet}"
+            lines.append(line)
+        return Text("\n".join(lines))
 
     def action_findings(self) -> None:
         from flosswing.tui.screens.findings import FindingsScreen

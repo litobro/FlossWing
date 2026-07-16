@@ -30,6 +30,35 @@ from textual.widgets import DataTable, Footer, Header, Static
 from flosswing import errors
 from flosswing.tui import data
 
+# Live-status glyphs. Kept as a named map so tests and the header stay in sync.
+_LIVE_GLYPH = {"live": "●", "stale": "⚠", "done": "·"}
+_LIVE_STYLE = {"live": "green", "stale": "yellow", "done": "dim"}
+
+
+def _format_elapsed(started_at: str) -> str:
+    """Humanised elapsed time since an ISO8601 timestamp, e.g. '3m12s'.
+
+    Returns '' if the timestamp can't be parsed — never raises into the poll.
+    """
+    from datetime import UTC, datetime
+
+    try:
+        start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        # A timezone-naive timestamp (no offset/'Z') makes the subtraction
+        # below raise TypeError; catch it here so the poll never sees it.
+        delta = datetime.now(UTC) - start
+    except (ValueError, AttributeError, TypeError):
+        return ""
+    secs = int(delta.total_seconds())
+    if secs < 0:
+        return ""
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m{secs % 60:02d}s"
+    hours, rem = divmod(secs, 3600)
+    return f"{hours}h{rem // 60:02d}m"
+
 
 class RunsScreen(Screen[None]):
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -53,7 +82,10 @@ class RunsScreen(Screen[None]):
 
     def on_mount(self) -> None:
         table = self.query_one("#runs-table", DataTable)
-        table.add_columns("Run", "Repo", "Status", "Findings", "Started")
+        table.add_columns(
+            "Run", "Repo", "Status", "Live", "Stage", "Findings", "Tokens",
+            "Elapsed", "Started",
+        )
         self.refresh_rows()
         self._poll = self.set_interval(2.0, self.refresh_rows)
 
@@ -74,13 +106,25 @@ class RunsScreen(Screen[None]):
         cursor = table.cursor_row
         table.clear()
         for r in rows:
+            live_glyph = Text(
+                _LIVE_GLYPH.get(r.liveness, "?"),
+                style=_LIVE_STYLE.get(r.liveness, ""),
+            )
+            # Only live runs get an elapsed value: a stale (crashed) run keeps
+            # DB status 'running', so gating on status would grow its Elapsed
+            # unbounded and present a dead scan as if still working.
+            elapsed = _format_elapsed(r.started_at) if r.liveness == "live" else ""
             table.add_row(
                 r.short_id,
                 # repo path is operator/DB-derived — render literally so it
                 # can't be interpreted as Rich markup.
                 Text(r.target_repo_path),
                 r.status,
+                live_glyph,
+                r.active_stage or "",
                 str(r.findings_count),
+                f"{r.tokens_used:,}",
+                elapsed,
                 r.started_at,
                 key=r.id,
             )
