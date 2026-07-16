@@ -287,3 +287,100 @@ def test_list_sessions(isolated_db: Path) -> None:
 
 def test_list_sessions_missing_run_is_empty(isolated_db: Path) -> None:
     assert data.list_sessions("nope") == []
+
+
+def test_list_runs_liveness_live_when_pid_alive(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+
+    _add_run("run-live", status="running")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: rid == "run-live")
+    row = {r.id: r for r in data.list_runs()}["run-live"]
+    assert row.liveness == "live"
+
+
+def test_list_runs_liveness_stale_when_pid_dead(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+
+    _add_run("run-dead", status="running")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+    row = {r.id: r for r in data.list_runs()}["run-dead"]
+    assert row.liveness == "stale"
+
+
+def test_list_runs_liveness_done_for_terminal_status(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+
+    _add_run("run-fin", status="completed")
+    # Even if a stale pid file somehow lingered, terminal status wins.
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+    row = {r.id: r for r in data.list_runs()}["run-fin"]
+    assert row.liveness == "done"
+
+
+def test_list_runs_tokens_used_summed(isolated_db: Path) -> None:
+    _add_run("run-tok", status="running")
+    _add_session("run-tok", stage="recon", in_tok=100, out_tok=50, cost=0.01)
+    _add_session("run-tok", stage="hunt", in_tok=200, out_tok=80, cost=0.02)
+    row = {r.id: r for r in data.list_runs()}["run-tok"]
+    assert row.tokens_used == 100 + 50 + 200 + 80
+
+
+def _add_symbol(run_id: str) -> None:
+    from flosswing.state.models import Symbol
+
+    with st_session.session_scope() as s:
+        s.add(
+            Symbol(
+                id=f"sym-{run_id}",
+                run_id=run_id,
+                symbol="f",
+                fully_qualified_name="f",
+                file="src/x.c",
+                line_start=1,
+                line_end=2,
+                kind="function",
+                language="c",
+            )
+        )
+
+
+def test_list_runs_active_stage_for_running(isolated_db: Path) -> None:
+    _add_run("run-mid", status="running")
+    _add_recon("run-mid")
+    _add_symbol("run-mid")  # Index done, so Hunt is the frontier stage
+    _add_hunt_task("t1", "run-mid", status="completed")
+    _add_hunt_task("t2", "run-mid", status="running")
+    row = {r.id: r for r in data.list_runs()}["run-mid"]
+    # Recon + Index done, Hunt partially done while running -> Hunt is active.
+    assert row.active_stage == "Hunt"
+
+
+def test_list_runs_active_stage_none_for_terminal(isolated_db: Path) -> None:
+    _add_run("run-term", status="completed")
+    row = {r.id: r for r in data.list_runs()}["run-term"]
+    assert row.active_stage is None
+
+
+def test_run_progress_liveness_live(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+
+    _add_run("rp-live", status="running")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+    p = data.run_progress("rp-live")
+    assert p is not None
+    assert p.liveness == "live"
+
+
+def test_run_progress_liveness_done_for_terminal(isolated_db: Path) -> None:
+    _add_run("rp-fin", status="completed")
+    p = data.run_progress("rp-fin")
+    assert p is not None
+    assert p.liveness == "done"

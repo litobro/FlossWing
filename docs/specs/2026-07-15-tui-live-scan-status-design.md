@@ -133,7 +133,8 @@ Columns become: **Run · Repo · Status · Live · Stage · Findings · Tokens �
 
 - **Live** — a glyph: `●` live (green), `⚠` stale (yellow), `·` done. Rendered as styled
   `Text` so it can't be interpreted as markup.
-- **Stage** — `active_stage or ""` (only populated for live running rows).
+- **Stage** — `active_stage or ""` (populated for all running rows, live or
+  stale; for a stale row it shows the stage the scan was in when it died).
 - **Tokens** — `tokens_used` (thousands-separated).
 - **Elapsed** — computed in-screen from `started_at` for running rows (`live` and `stale`);
   a stale row's elapsed shows how long it has been stuck. `""` for terminal rows.

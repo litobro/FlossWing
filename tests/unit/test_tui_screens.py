@@ -569,3 +569,133 @@ async def test_quit_guard_detach_exits(seeded_db: str) -> None:
         await pilot.pause()
     # Detach must NOT terminate the child.
     child.terminate.assert_not_called()
+
+
+def _add_running_run(run_id: str, *, path: str = "/tmp/live") -> None:
+    with st_session.session_scope() as s:
+        s.add(
+            Run(
+                id=run_id,
+                target_repo_path=path,
+                target_repo_sha=None,
+                depth="standard",
+                budget_total=20,
+                budget_used=0,
+                started_at=_iso(),
+                finished_at=None,
+                status="running",
+                config_json="{}",
+                flosswing_version="test",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_runs_screen_shows_stale_marker(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rich.style import Style
+
+    from flosswing import runpid
+    from flosswing.tui.screens.runs import _LIVE_GLYPH
+
+    _add_running_run("01JTESTRUN0000000000000009")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#runs-table", DataTable)
+        rendered = ""
+        for row in range(table.row_count):
+            lines = table._render_cell(row, 3, Style(), width=6)  # Live column
+            rendered += "".join(seg.text for line in lines for seg in line)
+        assert _LIVE_GLYPH["stale"] in rendered
+
+
+@pytest.mark.asyncio
+async def test_runs_screen_shows_live_marker(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rich.style import Style
+
+    from flosswing import runpid
+    from flosswing.tui.screens.runs import _LIVE_GLYPH
+
+    _add_running_run("01JTESTRUN0000000000000010")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#runs-table", DataTable)
+        rendered = ""
+        for row in range(table.row_count):
+            lines = table._render_cell(row, 3, Style(), width=6)
+            rendered += "".join(seg.text for line in lines for seg in line)
+        assert _LIVE_GLYPH["live"] in rendered
+
+
+@pytest.mark.asyncio
+async def test_run_detail_stale_banner_and_stops_polling(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+
+    _add_running_run("01JTESTRUN0000000000000011")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: False)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = RunDetailScreen("01JTESTRUN0000000000000011")
+        app.push_screen(screen)
+        await pilot.pause()
+        from textual.widgets import Static
+
+        banner = app.screen.query_one("#liveness-banner", Static)
+        assert "stopped" in str(banner.content).lower()
+        # A stale run never changes -> polling must stop.
+        assert screen._poll is None
+
+
+@pytest.mark.asyncio
+async def test_run_detail_live_banner(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+
+    _add_running_run("01JTESTRUN0000000000000012")
+    monkeypatch.setattr(runpid, "run_is_live", lambda rid: True)
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(RunDetailScreen("01JTESTRUN0000000000000012"))
+        await pilot.pause()
+        from textual.widgets import Static
+
+        banner = app.screen.query_one("#liveness-banner", Static)
+        assert "live" in str(banner.content).lower()
+
+
+@pytest.mark.asyncio
+async def test_run_detail_recent_activity_panel(seeded_db: str) -> None:
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(RunDetailScreen(seeded_db))
+        await pilot.pause()
+        from textual.widgets import Static
+
+        panel = app.screen.query_one("#recent-activity", Static)
+        # The seeded run has one 'hunt' agent session.
+        assert "hunt" in str(panel.content).lower()
