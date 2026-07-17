@@ -552,3 +552,84 @@ def test_validate_prompt_includes_hardcoded_secrets_disqualifiers() -> None:
     )
     prompt = _compose_user_prompt(f)
     assert "Disqualifiers" in prompt or "placeholder" in prompt.lower()
+
+
+def test_gate_downgrades_dev_default_secret(isolated_db: Path) -> None:
+    """Per spec § Part C: a confirmed hardcoded_secrets finding whose value
+    is an obvious dev default (docker-compose.yml, sentinel value) gets its
+    severity downgraded to info. Status never changes.
+
+    Reuses _seed_run_with_findings to satisfy the Run/HuntTask FKs, then
+    flips the seeded finding's fields to the shape under test (see task
+    brief note: insert a matching Run row first / reuse the helper)."""
+    from flosswing.stages.validate import _maybe_downgrade_secret
+    from flosswing.state.models import Finding
+
+    (isolated_db / "docker-compose.yml").write_text(
+        "services:\n  es:\n    environment:\n      ELASTIC_PASSWORD: devpass\n",
+        encoding="utf-8",
+    )
+    _run_id, finding_ids = _seed_run_with_findings(
+        severities=["high"], statuses=["confirmed"]
+    )
+    finding_id = finding_ids[0]
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        f.attack_class = "hardcoded_secrets"
+        f.file = "docker-compose.yml"
+        f.line_start = 4
+        f.line_end = 4
+
+    _maybe_downgrade_secret(finding_id, isolated_db)
+
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        assert f.severity == "info"
+        assert f.status == "confirmed"  # never changes status
+        assert "secrets_triage" in (f.root_cause_summary or "")
+
+
+def test_gate_leaves_real_secret_and_other_classes(isolated_db: Path) -> None:
+    """A confirmed hardcoded_secrets finding on a real high-entropy secret in
+    a prod .py file, and a confirmed sqli finding, are both left untouched by
+    the gate."""
+    from flosswing.stages.validate import _maybe_downgrade_secret
+    from flosswing.state.models import Finding
+
+    (isolated_db / "prod.py").write_text(
+        'API_KEY = "a9F3k1Lz8Qw2Rt7Yb4Xc6Vn0Ms5Pd3Hj1Gf9Kd2"\n', encoding="utf-8"
+    )
+    (isolated_db / "docker-compose.yml").write_text(
+        "services:\n  db:\n    image: postgres\n", encoding="utf-8"
+    )
+    _run_id, finding_ids = _seed_run_with_findings(
+        severities=["high", "high"], statuses=["confirmed", "confirmed"]
+    )
+    real_id, sqli_id = finding_ids
+    with st_session.session_scope() as s:
+        real = s.get(Finding, real_id)
+        assert real is not None
+        real.attack_class = "hardcoded_secrets"
+        real.file = "prod.py"
+        real.line_start = 1
+        real.line_end = 1
+
+        sqli = s.get(Finding, sqli_id)
+        assert sqli is not None
+        sqli.attack_class = "sqli"
+        sqli.file = "docker-compose.yml"
+        sqli.line_start = 1
+        sqli.line_end = 1
+
+    _maybe_downgrade_secret(real_id, isolated_db)
+    _maybe_downgrade_secret(sqli_id, isolated_db)
+
+    with st_session.session_scope() as s:
+        f_real = s.get(Finding, real_id)
+        f_sqli = s.get(Finding, sqli_id)
+        assert f_real is not None
+        assert f_sqli is not None
+        assert f_real.severity == "high"
+        assert f_sqli.severity == "high"
