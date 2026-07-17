@@ -29,6 +29,7 @@ from textual.widgets import DataTable, Footer, Header, Static
 
 from flosswing import errors
 from flosswing.tui import data
+from flosswing.tui.widgets import SelectableDataTable
 
 # Live-status glyphs. Kept as a named map so tests and the header stay in sync.
 # 'unknown' = a running row with no usable PID file: we can't confirm liveness,
@@ -78,7 +79,7 @@ class RunsScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(id="runs-table", cursor_type="row")
+        yield SelectableDataTable(id="runs-table", cursor_type="row")
         yield Static("", id="runs-empty")
         yield Footer()
 

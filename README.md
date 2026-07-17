@@ -205,6 +205,15 @@ Needs a real terminal (TTY). The `textual` dependency installs with
 the package. Repo-derived text is rendered literally, so untrusted
 finding content can't inject terminal markup or open links.
 
+**Copy & paste.** Drag with the mouse to select text — including rows
+in the runs/findings/sessions tables, which copy their *full*,
+untruncated run IDs and paths — then press `ctrl+c` to copy to the
+system clipboard (over SSH too, via OSC 52). Paste works normally in
+the "new scan" input fields. If you prefer your terminal's own copy
+(`ctrl+shift+c`), hold **shift** while dragging to bypass the app's
+mouse capture and make a native terminal selection instead — note that
+copies the raw on-screen text, so truncated cells copy truncated.
+
 ### Score against the eval corpus
 
 Measure detection quality against known-vulnerability ground truth.
