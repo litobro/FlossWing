@@ -108,6 +108,10 @@ build is not an agent stage — there is no `agent_sessions` row for it. See
   (Python), `java_deserialization`
 - Go: `nil_deref_in_error_path`, `unsafe_pointer_misuse`, `goroutine_leak`
 - Rust: `unsafe_audit`, `unwrap_in_reachable_path`, `soundness_bug`
+- AuthZ / injection / DoS (added 2026-07-16): `broken_authorization`
+  (IDOR/BOLA, distinct from `auth_bypass` authN), `toctou`, `ssti`, `redos`,
+  `crlf_injection`, `request_smuggling`, `ldap_injection`, `nosql_injection`,
+  `xpath_injection`, `log_injection`
 
 Adding new attack classes is a `prompts/attack_classes/<name>.md` file plus an entry in
 `glasswing/attack_classes.py`. No code changes elsewhere required.
