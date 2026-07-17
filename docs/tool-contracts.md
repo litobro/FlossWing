@@ -256,7 +256,7 @@ No errors expected; returns empty list if none match.
 
 ### Scope: execution
 
-Available to: Hunt, Validate.
+Available to: Validate.
 
 #### `compile_and_run`
 
@@ -566,7 +566,7 @@ class QueryRunStateOutput(BaseModel):
 | `find_definition`        |   ✓   |  ✓   |    ✓     |         |        |   ✓   |
 | `find_callers`           |       |  ✓   |    ✓     |         |        |   ✓   |
 | `query_entry_points`     |       |      |          |         |        |   ✓   |
-| `compile_and_run`        |       |  ✓   |    ✓     |         |        |       |
+| `compile_and_run`        |       |      |    ✓     |         |        |       |
 | `record_finding`         |       |  ✓   |          |         |        |       |
 | `query_findings`         |       |      |    ✓     |   ✓     |   ✓    |   ✓   |
 | `validate_finding`       |       |      |    ✓     |         |        |       |
