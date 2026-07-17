@@ -44,6 +44,7 @@ def _strip_all_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     for k in _ALL_AUTH_ENV:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("FLOSSWING_PROVIDER", raising=False)
+    monkeypatch.delenv("FLOSSWING_MODEL", raising=False)
     # Block any az-login probe; tests opt back in by re-patching.
     from flosswing.agent.providers import anthropic_sdk
     monkeypatch.setattr(anthropic_sdk, "_has_az_session", lambda: False)
@@ -63,7 +64,7 @@ def test_resolves_with_anthropic_api_key(
         gapfill_token_budget=None,
     )
     assert isinstance(cfg, Config)
-    assert cfg.model == "claude-opus-4-7"
+    assert cfg.model == "claude-opus-4-8"
     assert cfg.recon_token_budget == 200_000
     assert cfg.hunt_token_budget == 200_000
     assert "ANTHROPIC_API_KEY" in cfg.auth_env
@@ -611,3 +612,64 @@ def test_auth_env_keys_match_anthropic_provider() -> None:
 
     assert AnthropicSDKProvider.auth_env_keys == cfg_mod.AUTH_ENV_KEYS
     assert "FLOSSWING_PROVIDER" not in cfg_mod.AUTH_ENV_KEYS
+
+
+def test_default_model_is_opus_4_8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None,
+    )
+    assert cfg.model == "claude-opus-4-8"
+    assert cfg.model == cfg_mod.DEFAULT_MODEL
+
+
+def test_model_from_flosswing_model_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("FLOSSWING_MODEL", "claude-sonnet-5")
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None,
+    )
+    assert cfg.model == "claude-sonnet-5"
+
+
+def test_cli_model_beats_flosswing_model_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("FLOSSWING_MODEL", "claude-sonnet-5")
+    cfg = resolve(
+        repo_root=tmp_path, model="claude-opus-4-8", recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None,
+    )
+    assert cfg.model == "claude-opus-4-8"
+
+
+def test_dotenv_allowlist_includes_model_but_not_auth_keys_set() -> None:
+    # AUTH_ENV_KEYS must remain exactly the provider's auth keys.
+    assert "FLOSSWING_MODEL" not in cfg_mod.AUTH_ENV_KEYS
+    # The dotenv allowlist is a superset that also permits the model key.
+    assert "FLOSSWING_MODEL" in cfg_mod.DOTENV_ALLOWED_KEYS
+    assert cfg_mod.AUTH_ENV_KEYS <= cfg_mod.DOTENV_ALLOWED_KEYS
+    assert cfg_mod.MODEL_ENV_VAR in cfg_mod.DOTENV_ALLOWED_KEYS
+
+
+def test_env_or_default_model_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLOSSWING_MODEL", raising=False)
+    assert cfg_mod.env_or_default_model() == cfg_mod.DEFAULT_MODEL
+    monkeypatch.setenv("FLOSSWING_MODEL", "claude-sonnet-5")
+    assert cfg_mod.env_or_default_model() == "claude-sonnet-5"
+    # Empty string is treated as unset (falls back to default) — documented behavior.
+    monkeypatch.setenv("FLOSSWING_MODEL", "")
+    assert cfg_mod.env_or_default_model() == cfg_mod.DEFAULT_MODEL

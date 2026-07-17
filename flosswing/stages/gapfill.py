@@ -98,6 +98,7 @@ def _estimate_cost_usd(
 ) -> float:
     rates = {
         "claude-opus-4-7": (15.0, 75.0),
+        "claude-opus-4-8": (15.0, 75.0),
         "claude-sonnet-4-6": (3.0, 15.0),
         "claude-haiku-4-5": (0.80, 4.00),
     }

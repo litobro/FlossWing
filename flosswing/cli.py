@@ -85,10 +85,10 @@ def main(env_file: str | None, no_env_file: bool) -> None:
         # Default convenience load: restricted to known credential/config keys so
         # a stray .env (e.g. inside an untrusted target repo the operator runs
         # from) cannot inject arbitrary environment variables.
-        from flosswing.config import AUTH_ENV_KEYS
+        from flosswing.config import DOTENV_ALLOWED_KEYS
 
         source = ".env"
-        loaded = envfile.load_env_file(Path(source), allowed_keys=AUTH_ENV_KEYS)
+        loaded = envfile.load_env_file(Path(source), allowed_keys=DOTENV_ALLOWED_KEYS)
     else:
         # Explicit file: the operator is deliberately trusting it; load everything.
         source = env_file
@@ -109,7 +109,7 @@ def main(env_file: str | None, no_env_file: bool) -> None:
 @click.option(
     "--model",
     default=None,
-    help="Override the agent model (default claude-opus-4-7).",
+    help="Override the agent model (default from FLOSSWING_MODEL, else claude-opus-4-8).",
 )
 @click.option(
     "--provider",
@@ -342,6 +342,13 @@ def eval_(
         sys.exit(2)
 
     mdir = Path(manifest_dir) if manifest_dir else _corpus.DEFAULT_MANIFEST_DIR
+    if from_run is None:
+        # scan+score inherits the flagless model (FLOSSWING_MODEL, else default);
+        # name it so the scorecard is never misattributed to a different model.
+        from flosswing import config as _cfg
+
+        click.echo(f"eval model: {_cfg.env_or_default_model()}", err=True)
+
     try:
         result = _runner.run_evaluation(
             manifest_dir=mdir,
