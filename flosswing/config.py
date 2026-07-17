@@ -85,7 +85,23 @@ AUTH_ENV_KEYS: frozenset[str] = AnthropicSDKProvider.auth_env_keys
 # The default `.env` auto-load allowlist: auth keys plus FlossWing config keys
 # the operator may set persistently. Kept separate from AUTH_ENV_KEYS so the
 # latter stays exactly the provider's credential keys.
+#
+# Security note: including FLOSSWING_MODEL means a working-directory `.env` can
+# steer model selection. Exposure is narrow and bounded — the auto-load reads the
+# CWD, not the target repo passed as a path arg, so the normal
+# `flosswing scan <path>` flow (run from the operator's own dir) is never exposed;
+# only running flosswing from *inside* an untrusted repo is. The effect is
+# model-steering (degrade/misdirect a hunt), never credential exposure or code
+# execution. An explicit `--env-file PATH` remains the only way to load all keys.
 DOTENV_ALLOWED_KEYS: frozenset[str] = AUTH_ENV_KEYS | frozenset({MODEL_ENV_VAR})
+
+
+def env_or_default_model() -> str:
+    """The model used when no ``--model`` flag is given: ``FLOSSWING_MODEL`` if
+    set (and non-empty), else ``DEFAULT_MODEL``. Shared by ``resolve()`` and the
+    eval CLI so a reported model always matches what a flagless run actually uses.
+    """
+    return os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
 
 
 @dataclass(frozen=True)
@@ -138,7 +154,7 @@ def resolve(
 
     return Config(
         repo_root=repo_root,
-        model=model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL,
+        model=model or env_or_default_model(),
         recon_token_budget=(
             recon_token_budget
             if recon_token_budget is not None

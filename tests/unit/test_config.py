@@ -663,3 +663,13 @@ def test_dotenv_allowlist_includes_model_but_not_auth_keys_set() -> None:
     assert "FLOSSWING_MODEL" in cfg_mod.DOTENV_ALLOWED_KEYS
     assert cfg_mod.AUTH_ENV_KEYS <= cfg_mod.DOTENV_ALLOWED_KEYS
     assert cfg_mod.MODEL_ENV_VAR in cfg_mod.DOTENV_ALLOWED_KEYS
+
+
+def test_env_or_default_model_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLOSSWING_MODEL", raising=False)
+    assert cfg_mod.env_or_default_model() == cfg_mod.DEFAULT_MODEL
+    monkeypatch.setenv("FLOSSWING_MODEL", "claude-sonnet-5")
+    assert cfg_mod.env_or_default_model() == "claude-sonnet-5"
+    # Empty string is treated as unset (falls back to default) — documented behavior.
+    monkeypatch.setenv("FLOSSWING_MODEL", "")
+    assert cfg_mod.env_or_default_model() == cfg_mod.DEFAULT_MODEL

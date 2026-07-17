@@ -342,6 +342,13 @@ def eval_(
         sys.exit(2)
 
     mdir = Path(manifest_dir) if manifest_dir else _corpus.DEFAULT_MANIFEST_DIR
+    if from_run is None:
+        # scan+score inherits the flagless model (FLOSSWING_MODEL, else default);
+        # name it so the scorecard is never misattributed to a different model.
+        from flosswing import config as _cfg
+
+        click.echo(f"eval model: {_cfg.env_or_default_model()}", err=True)
+
     try:
         result = _runner.run_evaluation(
             manifest_dir=mdir,
