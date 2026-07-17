@@ -168,4 +168,57 @@ def _walk_manual(
             yield child, lang
 
 
-__all__ = ["walk"]
+def find_uninitialized_submodules(repo_root: Path) -> list[str]:
+    """Repo-relative paths of submodules declared in the index but not
+    checked out.
+
+    `git ls-files --recurse-submodules` silently omits submodules that have
+    no working tree, which would under-cover the scan without warning. This
+    surfaces them so the caller can warn the operator.
+
+    Enumerates gitlink entries (mode 160000) via `git ls-files --stage` and
+    returns those whose working tree lacks a `.git` entry. Returns [] in
+    non-git mode, on any git failure, or when there are no submodules.
+    """
+    if not (repo_root / ".git").exists():
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "-z", "--stage"],
+            capture_output=True,
+            timeout=_GIT_LS_FILES_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("git ls-files --stage unavailable (%s)", e)
+        return []
+    if proc.returncode != 0:
+        logger.warning(
+            "git ls-files --stage returned %d", proc.returncode
+        )
+        return []
+
+    skipped: list[str] = []
+    for entry in proc.stdout.split(b"\x00"):
+        if not entry:
+            continue
+        # Record layout: "<mode> <object> <stage>\t<path>".
+        meta, _tab, path_bytes = entry.partition(b"\t")
+        if not path_bytes:
+            continue
+        if meta.split(b" ", 1)[0] != b"160000":  # not a gitlink
+            continue
+        try:
+            rel = path_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.warning(
+                "skipping non-utf-8 submodule path from git ls-files"
+            )
+            continue
+        # A checked-out submodule work-tree has a `.git` file (or dir).
+        if not (repo_root / rel / ".git").exists():
+            skipped.append(rel)
+    return skipped
+
+
+__all__ = ["find_uninitialized_submodules", "walk"]

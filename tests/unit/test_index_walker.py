@@ -185,3 +185,52 @@ def test_walker_git_mode_recurses_submodules(tmp_path: Path) -> None:
     args, _ = m.call_args
     assert "--recurse-submodules" in args[0]
     assert files == ["glue.py", "vendor/lib/mod.py"]
+
+
+def test_find_uninitialized_submodules_reports_unchecked_out(
+    tmp_path: Path,
+) -> None:
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
+    # ext/bar is a checked-out submodule (has a .git marker file);
+    # vendor/foo is declared but never initialized (no working tree).
+    (repo / "ext" / "bar").mkdir(parents=True)
+    (repo / "ext" / "bar" / ".git").write_text("gitdir: ../.git/modules/bar\n")
+    stage_output = (
+        b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
+        b"160000 2222222222222222222222222222222222222222 0\tvendor/foo\x00"
+        b"160000 3333333333333333333333333333333333333333 0\text/bar\x00"
+    )
+    fake_proc = MagicMock(returncode=0, stdout=stage_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        result = walker.find_uninitialized_submodules(repo)
+    assert result == ["vendor/foo"]
+
+
+def test_find_uninitialized_submodules_empty_without_submodules(
+    tmp_path: Path,
+) -> None:
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
+    stage_output = (
+        b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
+    )
+    fake_proc = MagicMock(returncode=0, stdout=stage_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        assert walker.find_uninitialized_submodules(repo) == []
+
+
+def test_find_uninitialized_submodules_empty_in_non_git_mode(
+    tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path, {"src/keep.py": "pass\n"})  # no .git
+    with patch.object(subprocess, "run") as m:
+        assert walker.find_uninitialized_submodules(repo) == []
+    assert not m.called  # short-circuits before shelling out
+
+
+def test_find_uninitialized_submodules_empty_on_git_failure(
+    tmp_path: Path,
+) -> None:
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
+    fake_proc = MagicMock(returncode=128, stdout=b"", stderr=b"fatal")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        assert walker.find_uninitialized_submodules(repo) == []
