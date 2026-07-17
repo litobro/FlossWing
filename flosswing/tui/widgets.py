@@ -146,6 +146,9 @@ class SelectableDataTable(DataTable[Any]):
         text = "\n".join(self._content_lines()[offset + lo : offset + hi + 1])
         if not text:
             return
+        self.app.copy_to_clipboard(text)
+        # Record the span so ctrl+c / ctrl+shift+c re-copy it. get_selection only
+        # reads the y coordinates, so the x offsets are irrelevant (kept at 0).
         self.screen.selections = {
             self: Selection(Offset(0, offset + lo), Offset(0, offset + hi))
         }
