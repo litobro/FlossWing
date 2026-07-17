@@ -81,6 +81,11 @@ PROVIDER_ENV_VAR: str = "FLOSSWING_PROVIDER"
 # not be settable by an auto-loaded .env.
 AUTH_ENV_KEYS: frozenset[str] = AnthropicSDKProvider.auth_env_keys
 
+# The default `.env` auto-load allowlist: auth keys plus FlossWing config keys
+# the operator may set persistently. Kept separate from AUTH_ENV_KEYS so the
+# latter stays exactly the provider's credential keys.
+DOTENV_ALLOWED_KEYS: frozenset[str] = AUTH_ENV_KEYS | frozenset({MODEL_ENV_VAR})
+
 
 @dataclass(frozen=True)
 class Config:

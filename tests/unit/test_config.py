@@ -654,3 +654,12 @@ def test_cli_model_beats_flosswing_model_env(
         gapfill_token_budget=None,
     )
     assert cfg.model == "claude-opus-4-8"
+
+
+def test_dotenv_allowlist_includes_model_but_not_auth_keys_set() -> None:
+    # AUTH_ENV_KEYS must remain exactly the provider's auth keys.
+    assert "FLOSSWING_MODEL" not in cfg_mod.AUTH_ENV_KEYS
+    # The dotenv allowlist is a superset that also permits the model key.
+    assert "FLOSSWING_MODEL" in cfg_mod.DOTENV_ALLOWED_KEYS
+    assert cfg_mod.AUTH_ENV_KEYS <= cfg_mod.DOTENV_ALLOWED_KEYS
+    assert cfg_mod.MODEL_ENV_VAR in cfg_mod.DOTENV_ALLOWED_KEYS

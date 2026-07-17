@@ -85,10 +85,10 @@ def main(env_file: str | None, no_env_file: bool) -> None:
         # Default convenience load: restricted to known credential/config keys so
         # a stray .env (e.g. inside an untrusted target repo the operator runs
         # from) cannot inject arbitrary environment variables.
-        from flosswing.config import AUTH_ENV_KEYS
+        from flosswing.config import DOTENV_ALLOWED_KEYS
 
         source = ".env"
-        loaded = envfile.load_env_file(Path(source), allowed_keys=AUTH_ENV_KEYS)
+        loaded = envfile.load_env_file(Path(source), allowed_keys=DOTENV_ALLOWED_KEYS)
     else:
         # Explicit file: the operator is deliberately trusting it; load everything.
         source = env_file
