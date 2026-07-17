@@ -45,6 +45,7 @@ from ulid import ULID
 from flosswing.agent.runtime import run_session
 from flosswing.config import Config
 from flosswing.errors import FlosswingError, ToolValidationError
+from flosswing.prompts import load_attack_class_fragment
 from flosswing.sandbox.base import CompileAndRunInput
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, Validation
@@ -361,6 +362,7 @@ def _compose_user_prompt(finding: Finding) -> str:
     query_findings available if it wants the full row; this is a
     convenience header.
     """
+    fragment = load_attack_class_fragment(finding.attack_class)
     return (
         f"Finding under review:\n"
         f"  finding_id:   {finding.id}\n"
@@ -377,6 +379,10 @@ def _compose_user_prompt(finding: Finding) -> str:
         "\n"
         f"PoC code (if any):\n"
         f"{finding.poc_code or '<none>'}\n"
+        "\n"
+        "---\n"
+        "Attack-class guidance:\n"
+        f"{fragment}\n"
     )
 
 

@@ -537,3 +537,18 @@ async def test_validate_tool_builder_registers_all_eight_tools(
     # per spec § "Defence-in-depth: record_finding is not in Validate's
     # scope").
     assert "record_finding" not in tool_names
+
+
+def test_validate_prompt_includes_hardcoded_secrets_disqualifiers() -> None:
+    from flosswing.stages.validate import _compose_user_prompt
+    from flosswing.state.models import Finding
+
+    f = Finding(
+        id="01F", run_id="01R", hunt_task_id="01H",
+        attack_class="hardcoded_secrets", file="docker-compose.yml",
+        line_start=1, line_end=1, severity="high", confidence="likely",
+        status="pending_validation", title="t",
+        description="d" * 60, created_at="2026-07-16T00:00:00Z",
+    )
+    prompt = _compose_user_prompt(f)
+    assert "Disqualifiers" in prompt or "placeholder" in prompt.lower()
