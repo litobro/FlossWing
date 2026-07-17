@@ -89,6 +89,19 @@ REGISTRY: Final[dict[str, AttackClassMeta]] = dict(
         _entry("unsafe_audit", "rust"),
         _entry("unwrap_in_reachable_path", "rust"),
         _entry("soundness_bug", "rust"),
+        # Authorization / injection / DoS expansion (2026-07-16). See
+        # docs/specs/2026-07-16-attack-class-expansion-design.md. None of
+        # these permit network (unlike ssrf).
+        _entry("broken_authorization", "web"),
+        _entry("toctou", "polyglot"),
+        _entry("ssti", "web"),
+        _entry("redos", "polyglot"),
+        _entry("crlf_injection", "web"),
+        _entry("request_smuggling", "web"),
+        _entry("ldap_injection", "web"),
+        _entry("nosql_injection", "web"),
+        _entry("xpath_injection", "web"),
+        _entry("log_injection", "web"),
     ]
 )
 

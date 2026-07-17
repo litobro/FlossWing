@@ -44,8 +44,11 @@ def test_shared_loader_returns_authored_fragment() -> None:
 def test_shared_loader_falls_back_for_unauthored_class() -> None:
     from flosswing.prompts import load_attack_class_fragment
 
+    # Every *registered* class now ships an authored fragment (see
+    # test_attack_classes.test_every_registry_class_has_authored_fragment),
+    # so the fallback only fires for a well-formed but unknown class name.
     assert "No attack-class-specific guidance" in load_attack_class_fragment(
-        "buffer_overflow"
+        "some_unauthored_future_class"
     )
 
 

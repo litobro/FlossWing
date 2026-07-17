@@ -9,7 +9,8 @@ from flosswing.errors import InvalidAttackClassError
 
 
 def test_known_attack_classes_match_architecture_md() -> None:
-    # Sanity: a sample of each language family from ARCHITECTURE.md § Recon.
+    # Sanity: a sample of each language family from ARCHITECTURE.md § Recon,
+    # including the 2026-07-16 authZ/injection/DoS expansion.
     for name in [
         "command_injection",
         "path_traversal",
@@ -21,8 +22,40 @@ def test_known_attack_classes_match_architecture_md() -> None:
         "unsafe_yaml",
         "nil_deref_in_error_path",
         "unsafe_audit",
+        "broken_authorization",
+        "toctou",
+        "ssti",
+        "redos",
+        "crlf_injection",
+        "request_smuggling",
+        "ldap_injection",
+        "nosql_injection",
+        "xpath_injection",
+        "log_injection",
     ]:
         assert name in ac.REGISTRY, f"{name} missing from registry"
+
+
+def test_every_registry_class_has_authored_fragment() -> None:
+    """Every registered class must ship a real prompt fragment.
+
+    `load_attack_class_fragment` silently returns a generic fallback for
+    classes with no authored `.md`. That fallback is meant only for
+    genuinely-unknown input, never for a registered class — a registered
+    class on the fallback is an unimplemented class masquerading as
+    supported. Guard the "no gaps" invariant here.
+    """
+    from flosswing.prompts import load_attack_class_fragment
+
+    missing = []
+    for name in ac.REGISTRY:
+        fragment = load_attack_class_fragment(name)
+        if (
+            "No attack-class-specific guidance has been authored" in fragment
+            or f"# Attack class: {name}" not in fragment
+        ):
+            missing.append(name)
+    assert not missing, f"registered classes without an authored fragment: {missing}"
 
 
 def test_validate_accepts_known_class() -> None:

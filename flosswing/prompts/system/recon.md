@@ -53,6 +53,9 @@ The valid values are (any other string will be rejected):
 - `ssrf`, `unsafe_audit`, `unsafe_pointer_misuse`, `unsafe_yaml`
 - `unsafe_pickle` (Python deserialization)
 - `unwrap_in_reachable_path`, `use_after_free`, `xss`, `xxe`
+- `broken_authorization` (object-/function-level authZ; IDOR/BOLA)
+- `toctou`, `ssti`, `redos`, `crlf_injection`, `request_smuggling`
+- `ldap_injection`, `nosql_injection`, `xpath_injection`, `log_injection`
 
 ## Stop condition
 
