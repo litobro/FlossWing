@@ -50,18 +50,21 @@ _LOCALHOST_RE: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 _LITERAL_RE: Final[re.Pattern[str]] = re.compile(r"""["'`]([^"'`\n]{6,})["'`]""")
+_ASSIGN_RHS_RE: Final[re.Pattern[str]] = re.compile(
+    r"""[:=]\s*(?P<v>[^\s#'"`][^\n#]*?)\s*$""", re.MULTILINE
+)
 _PROD_SRC_SUFFIXES: Final[frozenset[str]] = frozenset({
     ".py", ".go", ".rs", ".c", ".cpp", ".cc", ".h", ".hpp",
     ".java", ".js", ".jsx", ".ts", ".tsx",
+    ".yaml", ".yml", ".json", ".ini", ".toml", ".cfg", ".conf",
 })
 
-# Threshold for the "real secret in prod source" false-negative guard.
-# Calibrated above crafted-but-plausible dev values (e.g. a hand-typed
-# "Ch@ngeTh!sPa33w0rd" or a "http://user:pass@localhost:9200" URL both land
-# ~3.9-3.95) and below genuinely random tokens (a 39-char random secret
-# lands ~5.0+), so a strong dev signal (sentinel word, localhost host, dev
-# path) is not vetoed by incidental entropy from a crafted-looking value.
-_HIGH_ENTROPY: Final[float] = 4.3
+# Threshold for the "real secret in prod source" false-negative guard. Signals
+# are value-scoped (see `_candidate_values`), so this only needs to guard the
+# rare case where a real secret's value literally contains a weak-signal
+# substring (e.g. "admin" inside a random token) — it is no longer load-
+# bearing for the variable-name false negative that motivated 4.3.
+_HIGH_ENTROPY: Final[float] = 3.5
 
 
 class SecretTriage(BaseModel):
@@ -80,16 +83,28 @@ def _shannon_entropy(s: str) -> float:
     return -sum((c / n) * math.log2(c / n) for c in counts.values())
 
 
-def _max_literal_entropy(text: str) -> float:
-    best = 0.0
+def _candidate_values(text: str) -> list[str]:
+    """Pull likely secret *values* out of an evidence blob: quoted string
+    literals plus the right-hand side of `key: value` / `key = value`
+    lines. Deliberately excludes bare identifiers/variable names so a
+    variable called CLIENT_SECRET does not itself count as a signal.
+    """
+    vals: list[str] = []
     for m in _LITERAL_RE.finditer(text):
-        best = max(best, _shannon_entropy(m.group(1)))
-    return best
+        vals.append(m.group(1))
+    for m in _ASSIGN_RHS_RE.finditer(text):
+        v = m.group("v").strip().strip("\"'`")
+        if v:
+            vals.append(v)
+    return vals
 
 
 def _is_prod_source(file_path: str) -> bool:
     if _DEV_PATH_RE.search(file_path):
         return False
+    name = PurePosixPath(file_path).name.lower()
+    if name == ".env" or name.startswith(".env.") or name.endswith(".env"):
+        return True
     return PurePosixPath(file_path).suffix.lower() in _PROD_SRC_SUFFIXES
 
 
@@ -100,38 +115,51 @@ def classify_secret(file_path: str, evidence_text: str) -> SecretTriage:
     `file_path` is the repo-relative path. Pure — the caller does the read.
     """
     text = evidence_text or ""
-    lower = text.lower()
+    values = _candidate_values(text)
 
     is_dev_path = bool(_DEV_PATH_RE.search(file_path))
-    has_sentinel = any(v in lower for v in _SENTINEL_VALUES)
-    has_word = bool(_SENTINEL_WORD_RE.search(text))
-    has_template = bool(_TEMPLATE_RE.search(text))
-    is_localhost = bool(_LOCALHOST_RE.search(text))
-    max_entropy = _max_literal_entropy(text)
-
-    dev_signal = (
-        has_sentinel or has_word or has_template or is_dev_path or is_localhost
+    has_template = any(_TEMPLATE_RE.search(v) for v in values)
+    has_localhost = any(_LOCALHOST_RE.search(v) for v in values)
+    has_sentinel = any(
+        sentinel in v.lower() for v in values for sentinel in _SENTINEL_VALUES
     )
-    # False-negative guard: never demote a very-high-entropy literal living
-    # in a production source path, even if a dev signal also matched.
-    counter_signal = max_entropy >= _HIGH_ENTROPY and _is_prod_source(file_path)
-    downgradeable = dev_signal and not counter_signal
+    has_word = any(_SENTINEL_WORD_RE.search(v) for v in values)
 
-    if is_dev_path:
-        classification: Classification = "test_fixture"
-        reason = "dev/test artifact path"
-    elif has_template:
-        classification = "placeholder"
-        reason = "templated placeholder value"
-    elif has_sentinel or has_word:
-        classification = "placeholder"
-        reason = "sentinel/placeholder value"
-    elif is_localhost:
-        classification = "dev_default"
-        reason = "localhost default value"
+    # Strong signals are reliable and are never vetoed by entropy.
+    strong_signal = is_dev_path or has_template or has_localhost
+    # Weak signals are substring guesses that can coincidentally match
+    # inside a real secret, so they remain subject to the entropy veto.
+    weak_signal = has_sentinel or has_word
+
+    # max() over an empty sequence would raise; no candidate values means no
+    # entropy evidence exists, so the counter-signal cannot fire.
+    max_value_entropy = max((_shannon_entropy(v) for v in values), default=0.0)
+    # False-negative guard: never demote a very-high-entropy value living in
+    # a production source path on the strength of a weak signal alone.
+    counter_signal = max_value_entropy >= _HIGH_ENTROPY and _is_prod_source(file_path)
+
+    downgradeable = strong_signal or (weak_signal and not counter_signal)
+
+    if downgradeable:
+        if is_dev_path:
+            classification: Classification = "test_fixture"
+            reason = "dev/test artifact path"
+        elif has_template:
+            classification = "placeholder"
+            reason = "templated placeholder value"
+        elif has_localhost:
+            classification = "dev_default"
+            reason = "localhost default value"
+        else:  # weak signal, un-vetoed
+            classification = "placeholder"
+            reason = "sentinel/placeholder value"
     else:
         classification = "real"
-        reason = "no dev signal"
+        reason = (
+            "high-entropy value in production source"
+            if (weak_signal and counter_signal)
+            else "no dev signal"
+        )
 
     return SecretTriage(
         downgradeable=downgradeable, classification=classification, reason=reason

@@ -16,7 +16,9 @@ _REAL = '"a9F3k1Lz8Qw2Rt7Yb4Xc6Vn0Ms5Pd3Hj1Gf9Kd2"'
         # Real triage examples -> downgradeable
         ("docker/docker-compose.yml", "ELASTIC_PASSWORD: devpass", True),
         ("docker/config.yml.template", "elastic:devpass@localhost", True),
-        ("config.py", 'password = "Ch@ngeTh!sPa33w0rd"', True),
+        # Leetspeak placeholder in prod source is NOT recognizable from the
+        # value alone; safe direction is to keep it (shown at full severity).
+        ("config.py", 'password = "Ch@ngeTh!sPa33w0rd"', False),
         ("assemblyline/common/config.py", 'key = "changeme"', True),
         ("test/docker-compose.yml", f"secret = {_REAL}", True),  # test path wins
         ("docker-compose.dev.yaml", "MINIO_SECRET_KEY: minioadmin", True),
@@ -24,6 +26,9 @@ _REAL = '"a9F3k1Lz8Qw2Rt7Yb4Xc6Vn0Ms5Pd3Hj1Gf9Kd2"'
         # Real secret in production source -> NOT downgradeable (guard)
         ("flosswing/prod.py", f"API_KEY = {_REAL}", False),
         ("assemblyline/service.py", f'token = {_REAL}', False),
+        # Variable *name* contains "secret" but the value itself does not
+        # carry a dev signal -> must not be downgraded (Critical regression).
+        ("flosswing/config.py", 'CLIENT_SECRET = "3f9a7c2e8b1d4f6a"', False),
     ],
 )
 def test_classify_secret_downgrade_decision(
@@ -41,3 +46,13 @@ def test_classify_secret_never_emits_real_value() -> None:
 def test_classify_secret_empty_evidence_uses_path_only() -> None:
     assert classify_secret("tests/fixtures/x.py", "").downgradeable is True
     assert classify_secret("flosswing/x.py", "").downgradeable is False
+
+
+def test_classify_secret_entropy_guard_vetoes_weak_sentinel_match() -> None:
+    # value contains the substring "admin" but is a real random token
+    result = classify_secret(
+        "flosswing/app.py",
+        'token = "adminX9f3K1Lz8Qw2Rt7Yb4Xc6Vn0Ms5Pd3Hj1"',
+    )
+    assert result.downgradeable is False
+    assert result.classification == "real"
