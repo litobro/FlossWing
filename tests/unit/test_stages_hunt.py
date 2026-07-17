@@ -49,6 +49,15 @@ def test_shared_loader_falls_back_for_unauthored_class() -> None:
     )
 
 
+def test_shared_loader_rejects_path_traversal() -> None:
+    from flosswing.prompts import load_attack_class_fragment
+
+    # attack_class is free-text DB input; a traversal payload must not read
+    # an out-of-tree file — it falls back to the generic fragment instead.
+    for evil in ("../../etc/passwd", "..", "a/b", "command_injection/../x"):
+        assert "No attack-class-specific guidance" in load_attack_class_fragment(evil)
+
+
 @pytest.fixture()
 def fresh_db_with_tasks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

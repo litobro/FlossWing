@@ -391,11 +391,18 @@ def _compose_user_prompt(finding: Finding) -> str:
 
 
 def _read_source_span(repo: Path, file: str, line_start: int, line_end: int) -> str:
+    # `file` is untrusted (target-repo-influenced): an absolute path would make
+    # `repo / file` discard `repo`, and `..`/symlinks could escape it. Resolve
+    # and require the result to stay under repo; fail closed to an empty span.
     try:
-        lines = (repo / file).read_text(
+        repo_root = repo.resolve()
+        target = (repo_root / file).resolve()
+        if not target.is_relative_to(repo_root):
+            return ""
+        lines = target.read_text(
             encoding="utf-8", errors="replace"
         ).splitlines()
-    except OSError:
+    except (OSError, ValueError):
         return ""
     lo = max(line_start - 1, 0)
     hi = min(line_end, len(lines))

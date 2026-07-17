@@ -18,11 +18,18 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Final
 
 _PROMPTS_ROOT: Final[Path] = Path(__file__).resolve().parent
 _ATTACK_CLASS_DIR: Final[Path] = _PROMPTS_ROOT / "attack_classes"
+
+# Attack-class names are lowercase snake_case (see flosswing/attack_classes.py).
+# `attack_class` reaches here from a free-text DB column, so validate against a
+# strict allowlist before building a filesystem path — otherwise a value like
+# `../../etc/passwd` would traverse out of the attack_classes dir.
+_SAFE_ATTACK_CLASS_RE: Final[re.Pattern[str]] = re.compile(r"[a-z0-9_]+")
 
 _GENERIC_FRAGMENT_FALLBACK: Final[str] = (
     "No attack-class-specific guidance has been authored for "
@@ -33,10 +40,15 @@ _GENERIC_FRAGMENT_FALLBACK: Final[str] = (
 
 
 def load_attack_class_fragment(attack_class: str) -> str:
-    """Load the per-attack-class prompt fragment, or a generic fallback."""
-    p = _ATTACK_CLASS_DIR / f"{attack_class}.md"
-    if p.exists():
-        return p.read_text(encoding="utf-8")
+    """Load the per-attack-class prompt fragment, or a generic fallback.
+
+    `attack_class` is untrusted free text; names that aren't a plain
+    snake_case token fall back rather than touching an unexpected path.
+    """
+    if _SAFE_ATTACK_CLASS_RE.fullmatch(attack_class):
+        p = _ATTACK_CLASS_DIR / f"{attack_class}.md"
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
     return _GENERIC_FRAGMENT_FALLBACK.format(attack_class=attack_class)
 
 

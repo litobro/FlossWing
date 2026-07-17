@@ -622,6 +622,30 @@ def test_gate_does_not_raise_on_nul_byte_in_path(isolated_db: Path) -> None:
         assert f.status == "confirmed"  # unchanged
 
 
+def test_read_source_span_refuses_paths_outside_repo(tmp_path: Path) -> None:
+    """`finding.file` is untrusted; reads must stay under `repo` and fail
+    closed to an empty span for absolute paths, `..` traversal, and
+    symlinks that escape the repo."""
+    from flosswing.stages.validate import _read_source_span
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "in_repo.py").write_text("secret = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("TOP SECRET\n", encoding="utf-8")
+
+    # In-repo read works.
+    assert _read_source_span(repo, "in_repo.py", 1, 1) == "secret = 1"
+    # Absolute path escapes repo -> empty.
+    assert _read_source_span(repo, str(outside), 1, 1) == ""
+    # `..` traversal escapes repo -> empty.
+    assert _read_source_span(repo, "../outside.txt", 1, 1) == ""
+    # Symlink pointing outside the repo -> empty.
+    link = repo / "link.txt"
+    link.symlink_to(outside)
+    assert _read_source_span(repo, "link.txt", 1, 1) == ""
+
+
 def test_gate_leaves_real_secret_and_other_classes(isolated_db: Path) -> None:
     """A confirmed hardcoded_secrets finding on a real high-entropy secret in
     a prod .py file, and a confirmed sqli finding, are both left untouched by
