@@ -417,11 +417,11 @@ def _maybe_downgrade_secret(finding_id: str, repo: Path) -> None:
             or finding.severity == "info"
         ):
             return
-        span = _read_source_span(
-            repo, finding.file, finding.line_start, finding.line_end
-        )
-        evidence = f"{span}\n{finding.poc_code or ''}"
         try:
+            span = _read_source_span(
+                repo, finding.file, finding.line_start, finding.line_end
+            )
+            evidence = f"{span}\n{finding.poc_code or ''}"
             triage = classify_secret(finding.file, evidence)
         except Exception:  # gate must fail open, never crash stage (BLE001 unselected)
             logger.exception("secrets_triage failed for finding %s", finding_id)

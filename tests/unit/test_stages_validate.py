@@ -591,6 +591,37 @@ def test_gate_downgrades_dev_default_secret(isolated_db: Path) -> None:
         assert "secrets_triage" in (f.root_cause_summary or "")
 
 
+def test_gate_does_not_raise_on_nul_byte_in_path(isolated_db: Path) -> None:
+    """Per final-fix-brief Fix 2: `_read_source_span` and the `evidence`
+    construction must run INSIDE the fail-open try/except, so a
+    non-OSError (e.g. ValueError: embedded null byte, raised when the
+    Hunt-agent-influenced `finding.file` contains a NUL) does not escape
+    and crash the Validate stage. Severity is left unchanged."""
+    from flosswing.stages.validate import _maybe_downgrade_secret
+    from flosswing.state.models import Finding
+
+    _run_id, finding_ids = _seed_run_with_findings(
+        severities=["high"], statuses=["confirmed"]
+    )
+    finding_id = finding_ids[0]
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        f.attack_class = "hardcoded_secrets"
+        f.file = "a\x00b.py"
+        f.line_start = 1
+        f.line_end = 1
+
+    # Must not raise.
+    _maybe_downgrade_secret(finding_id, isolated_db)
+
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        assert f.severity == "high"  # unchanged
+        assert f.status == "confirmed"  # unchanged
+
+
 def test_gate_leaves_real_secret_and_other_classes(isolated_db: Path) -> None:
     """A confirmed hardcoded_secrets finding on a real high-entropy secret in
     a prod .py file, and a confirmed sqli finding, are both left untouched by
