@@ -340,16 +340,18 @@ class AnthropicSDKProvider:
         cost_usd: float | None = None
         last_emit = 0.0
 
-        def _emit(*, force: bool, cost: float | None) -> None:
-            """Push a cumulative UsageSnapshot to on_usage (throttled).
+        def _emit() -> None:
+            """Push a per-turn UsageSnapshot to on_usage (throttled).
 
             Never propagates: a telemetry write must not abort a live session.
+            Cost is left None (interim): the caller estimates from tokens until
+            the authoritative figure lands in the finalized agent_sessions row.
             """
             nonlocal last_emit
             if on_usage is None:
                 return
             now = time.monotonic()
-            if not force and (now - last_emit) < _MIN_EMIT_INTERVAL_S:
+            if (now - last_emit) < _MIN_EMIT_INTERVAL_S:
                 return
             last_emit = now
             try:
@@ -360,7 +362,7 @@ class AnthropicSDKProvider:
                         cache_read_tokens=usage.get("cache_read_tokens", 0),
                         cache_write_tokens=usage.get("cache_write_tokens", 0),
                         tool_calls_count=tool_calls,
-                        cost_usd=cost,
+                        cost_usd=None,
                     )
                 )
             except Exception:
@@ -378,10 +380,8 @@ class AnthropicSDKProvider:
                     u = _harvest_usage(message.usage)
                     if u:
                         usage = u
-                        # Live tick: no authoritative cost yet (that arrives
-                        # only on the ResultMessage), so pass cost=None and let
-                        # the caller estimate from the token counts.
-                        _emit(force=False, cost=None)
+                        # Live tick for the in-flight ticker (throttled).
+                        _emit()
                     if message.stop_reason:
                         stop_reason = message.stop_reason
                     # AssistantMessage.error is a Literal of error categories.
@@ -413,10 +413,11 @@ class AnthropicSDKProvider:
                     # indicates a refusal; capture it for the classifier.
                     if message.stop_reason == "refusal" and message.result:
                         refusal_text = message.result
-                    # Final tick: force past the throttle and carry the
-                    # authoritative cost so the live counter's last frame is
-                    # exact before the caller finalizes and clears it.
-                    _emit(force=True, cost=cost_usd)
+                    # No terminal emit here: the caller finalizes and deletes
+                    # the heartbeat within microseconds of this branch, so a
+                    # final upsert would only ever be written and immediately
+                    # deleted, never observed by the ~1s TUI poll. The live
+                    # ticker is driven by the per-turn AssistantMessage emits.
                 # Best-effort budget check: abort the iterator if we've
                 # already overshot.
                 if usage.get("input_tokens", 0) > token_budget:

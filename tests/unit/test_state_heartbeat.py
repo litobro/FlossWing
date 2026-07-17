@@ -116,6 +116,42 @@ def test_make_on_usage_estimates_cost_when_snapshot_cost_none(db: str) -> None:
     assert row.cost_usd == 15.0  # estimated from tokens, not left at 0
 
 
+def test_seed_creates_zeroed_row_at_session_start(db: str) -> None:
+    with st_session.session_scope() as s:
+        st_heartbeat.seed(
+            s,
+            run_id=db,
+            stage="validate",
+            model="claude-opus-4-8",
+            agent_session_id="as-1",
+            finding_id="f-1",
+        )
+    row = _get(db)
+    assert row is not None
+    assert (row.input_tokens, row.output_tokens, row.cost_usd) == (0, 0, 0.0)
+    assert row.stage == "validate"
+    # A later on_usage upsert updates counters but preserves the seeded start.
+    first_started = row.started_at
+    st_heartbeat.make_on_usage(
+        run_id=db, stage="validate", model="claude-opus-4-8", agent_session_id="as-1"
+    )(_snap(in_tok=200, out_tok=50, cost=0.3))
+    updated = _get(db)
+    assert updated is not None
+    assert updated.input_tokens == 200
+    assert updated.started_at == first_started
+
+
+def test_seed_hidden_id_matches_agent_session_id(db: str) -> None:
+    # The seeded row carries agent_session_id so the TUI can hide the placeholder.
+    with st_session.session_scope() as s:
+        st_heartbeat.seed(
+            s, run_id=db, stage="dedupe", model="m", agent_session_id="as-xyz"
+        )
+        row = s.get(SessionHeartbeat, db)
+        assert row is not None
+        assert row.agent_session_id == "as-xyz"
+
+
 def test_clear_removes_row_within_open_session(db: str) -> None:
     st_heartbeat.make_on_usage(run_id=db, stage="recon", model="m")(
         _snap(in_tok=1, out_tok=1, cost=0.0)

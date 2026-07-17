@@ -624,3 +624,70 @@ def test_list_sessions_shows_placeholder_once_run_not_live(
 
     stages = [sr.stage for sr in data.list_sessions("ls-done")]
     assert stages == ["validate"]
+
+
+def test_run_progress_rate_uses_heartbeat_start_not_run_start(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live rate is measured over the current session (heartbeat start),
+    not the whole run — so a long-idle run still shows the burst's real rate."""
+    from datetime import timedelta
+
+    from flosswing import runpid
+
+    # Run started long ago; the in-flight session started ~10s ago.
+    _add_run("rp-hbrate", status="running", started_at="2020-01-01T00:00:00Z")
+    hb_started = (
+        (datetime.now(UTC) - timedelta(seconds=10))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    _add_heartbeat("rp-hbrate", in_tok=600, out_tok=0, cost=1.0, started_at=hb_started)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
+
+    p = data.run_progress("rp-hbrate")
+    assert p is not None
+    # ~600 tokens / ~10s ≈ 60 tok/s. If it used the run's multi-year elapsed it
+    # would be ~0. Assert it reflects the session, not the run.
+    assert p.tokens_per_sec is not None and p.tokens_per_sec > 10
+
+
+def test_activity_returns_live_and_sessions_in_one_call(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+
+    _add_run("act-1", status="running")
+    _add_session("act-1", stage="recon", in_tok=10, out_tok=5, cost=0.1)
+    _add_heartbeat("act-1", stage="hunt", in_tok=50, out_tok=5, cost=0.02)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
+
+    live, sessions = data.activity("act-1")
+    assert live is not None and live.stage == "hunt"
+    assert [s.stage for s in sessions] == ["recon"]
+
+
+def test_activity_missing_run_returns_empty(isolated_db: Path) -> None:
+    assert data.activity("ghost") == (None, [])
+
+
+def test_run_detail_view_bundles_progress_live_sessions(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import runpid
+
+    _add_run("rdv-1", status="running")
+    _add_recon("rdv-1")
+    _add_session("rdv-1", stage="recon", in_tok=100, out_tok=50, cost=0.1)
+    _add_heartbeat("rdv-1", stage="hunt", in_tok=200, out_tok=80, cost=0.05)
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
+
+    view = data.run_detail_view("rdv-1")
+    assert view is not None
+    assert view.progress.tokens_used == 100 + 50 + 200 + 80  # live-inclusive
+    assert view.live is not None and view.live.stage == "hunt"
+    assert [s.stage for s in view.recent_sessions] == ["recon"]
+
+
+def test_run_detail_view_none_for_missing_run(isolated_db: Path) -> None:
+    assert data.run_detail_view("ghost") is None

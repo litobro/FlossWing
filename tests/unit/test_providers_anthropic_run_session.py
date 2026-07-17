@@ -113,8 +113,9 @@ async def test_on_usage_fires_and_is_throttled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Freeze the clock so the two rapid assistant turns fall inside one throttle
-    # window: the second is suppressed, but the terminal ResultMessage always
-    # force-flushes. Net: 2 emits (first assistant + forced result).
+    # window: the first emits, the second is suppressed. The ResultMessage does
+    # NOT emit (that final frame would only be written then immediately deleted
+    # by the caller's finalize). Net: exactly 1 emit.
     monkeypatch.setattr(anthropic_sdk.time, "monotonic", lambda: 100.0)
     _patch_query(
         monkeypatch,
@@ -126,10 +127,11 @@ async def test_on_usage_fires_and_is_throttled(
     )
     snaps: list[UsageSnapshot] = []
     await _run(on_usage=snaps.append)
-    assert len(snaps) == 2
-    # The forced final emit carries the authoritative cost.
-    assert snaps[-1].cost_usd == 1.5
-    assert snaps[-1].input_tokens == 300
+    assert len(snaps) == 1
+    # Interim emit carries the latest turn's usage; cost is None (estimated
+    # downstream) until the authoritative figure lands in the finalized row.
+    assert snaps[0].input_tokens == 100
+    assert snaps[0].cost_usd is None
 
 
 @pytest.mark.asyncio

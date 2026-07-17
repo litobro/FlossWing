@@ -77,9 +77,19 @@ def resolve_cost_usd(
     cache_write_tokens: int = 0,
     authoritative: float | None,
 ) -> float:
-    """The session's cost: the provider's authoritative figure if present, else
-    an estimate from the token counts. This is the one place stages decide."""
-    if authoritative is not None:
+    """The session's cost: the provider's authoritative figure when it is a
+    positive value, else an estimate from the token counts. This is the one
+    place stages decide.
+
+    A reported ``0.0`` is treated as "no usable figure" and falls back to the
+    estimate, not taken as final. Some auth paths (e.g. Claude-Code/subscription
+    billing, or the spurious is_error/success result) report ``total_cost_usd``
+    as ``0.0`` for a session that actually burned tokens; taking that literally
+    would silently write $0.00 for a real, token-consuming session. Every stage
+    on the pre-heartbeat code path always estimated a positive cost, and this
+    module's guarantee is that a token-consuming session is never silently zero.
+    """
+    if authoritative is not None and authoritative > 0.0:
         return authoritative
     return estimate_cost_usd(
         model=model,

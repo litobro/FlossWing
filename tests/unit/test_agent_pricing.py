@@ -77,13 +77,26 @@ def test_resolve_estimates_when_authoritative_none() -> None:
     assert cost == 15.0  # falls back to the estimate
 
 
-def test_resolve_authoritative_zero_is_respected_not_treated_as_missing() -> None:
-    # 0.0 is a real authoritative value (e.g. a fully-cached turn), distinct
-    # from None; it must not trigger the estimate fallback.
+def test_resolve_authoritative_zero_falls_back_to_estimate() -> None:
+    # A reported 0.0 for a token-consuming session (e.g. subscription auth that
+    # doesn't surface per-token billing) must NOT be taken as final — that would
+    # silently record $0.00 for a real session. It falls back to the estimate,
+    # honoring "a token-consuming session is never silently zero".
     cost = pricing.resolve_cost_usd(
         model="claude-opus-4-8",
         input_tokens=1_000_000,
-        output_tokens=1_000_000,
+        output_tokens=0,
+        authoritative=0.0,
+    )
+    assert cost == 15.0  # estimated, not the reported zero
+
+
+def test_resolve_zero_tokens_zero_authoritative_is_zero() -> None:
+    # With no tokens, both the reported 0.0 and the estimate are 0.0 — no spurious cost.
+    cost = pricing.resolve_cost_usd(
+        model="claude-opus-4-8",
+        input_tokens=0,
+        output_tokens=0,
         authoritative=0.0,
     )
     assert cost == 0.0

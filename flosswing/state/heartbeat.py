@@ -117,6 +117,65 @@ def make_on_usage(
     return _on_usage
 
 
+def seed(
+    s: Session,
+    *,
+    run_id: str,
+    stage: str,
+    model: str,
+    agent_session_id: str,
+    task_id: str | None = None,
+    finding_id: str | None = None,
+) -> None:
+    """Insert a zeroed heartbeat row at session START, inside an already-open
+    session.
+
+    The pre-insert stages (validate/dedupe/trace) commit a placeholder
+    agent_sessions row before awaiting the session. Seeding the heartbeat in the
+    SAME transaction means the TUI hides that placeholder and shows a live line
+    from t=0 — not only once the first on_usage emit lands (which can be seconds
+    later on a slow first token). Subsequent on_usage upserts update this row and
+    preserve its started_at, so the live rate is measured from the true start.
+    """
+    now = _now_iso()
+    row = s.get(SessionHeartbeat, run_id)
+    if row is None:
+        s.add(
+            SessionHeartbeat(
+                run_id=run_id,
+                stage=stage,
+                task_id=task_id,
+                finding_id=finding_id,
+                agent_session_id=agent_session_id,
+                model=model,
+                input_tokens=0,
+                output_tokens=0,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                cost_usd=0.0,
+                tool_calls_count=0,
+                started_at=now,
+                updated_at=now,
+            )
+        )
+        return
+    # Defensive: a prior session's row should already have been cleared. Reset
+    # it to this session so a stale row can't mislabel the live line.
+    row.stage = stage
+    row.task_id = task_id
+    row.finding_id = finding_id
+    row.agent_session_id = agent_session_id
+    row.model = model
+    row.input_tokens = 0
+    row.output_tokens = 0
+    row.cache_read_tokens = 0
+    row.cache_write_tokens = 0
+    row.cost_usd = 0.0
+    row.tool_calls_count = 0
+    row.started_at = now
+    row.updated_at = now
+
+
 def clear(s: Session, run_id: str) -> None:
     """Delete ``run_id``'s heartbeat row inside an ALREADY-OPEN session.
 

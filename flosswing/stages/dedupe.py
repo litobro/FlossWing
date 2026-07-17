@@ -611,6 +611,15 @@ async def _pass2(
                     finished_at=started_at,
                 )
             )
+            # Seed the live heartbeat in the same transaction so the TUI hides
+            # this placeholder (and shows a live line) from session start.
+            st_heartbeat.seed(
+                s,
+                run_id=run_id,
+                stage="dedupe",
+                model=cfg.model,
+                agent_session_id=agent_session_id,
+            )
 
         tools = _build_dedupe_tools(repo_root=repo, run_id=run_id)
 

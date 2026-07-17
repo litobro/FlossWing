@@ -219,6 +219,30 @@ async def test_sessions_screen_shows_live_row(
 
 
 @pytest.mark.asyncio
+async def test_sessions_screen_survives_transient_read_error(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient DB read error must not permanently stop the poll timer —
+    the tick is skipped and polling continues."""
+    from flosswing.tui import data
+    from flosswing.tui.screens.sessions import SessionsScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = SessionsScreen(seeded_db)
+        app.push_screen(screen)
+        await pilot.pause()
+
+        def boom(_run_id: str) -> object:
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(data, "activity", boom)
+        screen.refresh_rows()  # must not raise, must not stop the poll
+        assert screen._poll is not None  # timer still armed for the next tick
+
+
+@pytest.mark.asyncio
 async def test_findings_screen_lists_finding(seeded_db: str) -> None:
     from flosswing.tui.screens.findings import FindingsScreen
 

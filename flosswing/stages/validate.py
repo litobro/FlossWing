@@ -531,6 +531,17 @@ async def run(
                     finished_at=started_at,
                 )
             )
+            # Seed the live heartbeat in the same transaction so the TUI hides
+            # this placeholder (and shows a live line) from the moment the
+            # session starts, not only after the first on_usage emit.
+            st_heartbeat.seed(
+                s,
+                run_id=run_id,
+                stage="validate",
+                model=cfg.model,
+                agent_session_id=agent_session_id,
+                finding_id=finding_id,
+            )
 
         tools = _build_validate_tools(
             repo_root=repo,

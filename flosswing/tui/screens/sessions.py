@@ -56,12 +56,12 @@ class SessionsScreen(Screen[None]):
     def refresh_rows(self) -> None:
         table = self.query_one("#sessions-table", DataTable)
         try:
-            sessions = data.list_sessions(self._run_id)
-            live = data.live_session(self._run_id)
-        except Exception:  # DB unreadable — stop polling, leave table as-is
-            if self._poll is not None:
-                self._poll.stop()
-                self._poll = None
+            # One transaction: the live line and the session list always agree.
+            live, sessions = data.activity(self._run_id)
+        except Exception:
+            # A transient read error (e.g. a momentary SQLite lock while the
+            # scan writes heartbeats) must not permanently freeze the view:
+            # skip this tick, keep the timer armed, and retry on the next poll.
             return
         cursor = table.cursor_row
         table.clear()
