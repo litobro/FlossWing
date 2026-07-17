@@ -56,3 +56,16 @@ def test_classify_secret_entropy_guard_vetoes_weak_sentinel_match() -> None:
     )
     assert result.downgradeable is False
     assert result.classification == "real"
+
+
+def test_real_secret_colocated_with_localhost_is_not_downgraded() -> None:
+    # A real high-entropy secret sharing its evidence span with a
+    # localhost reference must NOT be downgraded on the strength of the
+    # localhost match alone (localhost is a weak, entropy-vetoed signal).
+    evidence = (
+        'DB_HOST = "localhost"\n'
+        'API_KEY = "a9F3k1Lz8Qw2Rt7Yb4Xc6Vn0Ms5Pd3Hj1Gf9Kd2"'
+    )
+    result = classify_secret("flosswing/config.py", evidence)
+    assert result.downgradeable is False
+    assert result.classification == "real"

@@ -1,3 +1,19 @@
+# FlossWing — local-CLI vulnerability research harness.
+# Copyright (C) 2026  FlossWing contributors
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 """Deterministic post-verdict triage for hardcoded_secrets findings.
 
 Pure, side-effect-free. The Validate stage uses this to downgrade a
@@ -9,6 +25,12 @@ Policy: strong-signal-required. Downgrade only when a high-confidence
 dev signal is present AND there is no strong "real secret" counter-signal
 (a high-entropy literal living in a production source path). This biases
 toward *keeping* findings, so a real secret is never silently demoted.
+
+`localhost`/RFC-1918 references are a WEAK signal, not a strong one: a
+real high-entropy secret can share its evidence span with an unrelated
+localhost/RFC-1918 reference (e.g. a co-located `DB_HOST = "localhost"`
+line), so `has_localhost` alone must not bypass the entropy counter-
+signal — see `_HIGH_ENTROPY`.
 """
 
 from __future__ import annotations
@@ -60,11 +82,20 @@ _PROD_SRC_SUFFIXES: Final[frozenset[str]] = frozenset({
 })
 
 # Threshold for the "real secret in prod source" false-negative guard. Signals
-# are value-scoped (see `_candidate_values`), so this only needs to guard the
-# rare case where a real secret's value literally contains a weak-signal
-# substring (e.g. "admin" inside a random token) — it is no longer load-
-# bearing for the variable-name false negative that motivated 4.3.
-_HIGH_ENTROPY: Final[float] = 3.5
+# are value-scoped (see `_candidate_values`), so this guards two cases: (a) a
+# real secret's value literally contains a weak-signal substring (e.g.
+# "admin" inside a random token), and (b) a real secret that merely shares
+# its evidence span with a `localhost`/RFC-1918 reference (`has_localhost` is
+# a WEAK signal — see below — precisely so this veto can fire for it).
+#
+# Empirically measured (see tests/unit/test_secrets_triage.py):
+#   - "http://user:pass@localhost:9200" (benign dev connection string)
+#     -> Shannon entropy ~3.94 bits/char
+#   - "adminX9f3K1Lz8Qw2Rt7Yb4Xc6Vn0Ms5Pd3Hj1" (real random token that
+#     happens to contain the substring "admin") -> ~4.98 bits/char
+# 4.2 sits in the gap: above the benign localhost literal (so it stays
+# downgradeable) and below a real secret's entropy (so it stays protected).
+_HIGH_ENTROPY: Final[float] = 4.2
 
 
 class SecretTriage(BaseModel):
@@ -126,10 +157,12 @@ def classify_secret(file_path: str, evidence_text: str) -> SecretTriage:
     has_word = any(_SENTINEL_WORD_RE.search(v) for v in values)
 
     # Strong signals are reliable and are never vetoed by entropy.
-    strong_signal = is_dev_path or has_template or has_localhost
-    # Weak signals are substring guesses that can coincidentally match
-    # inside a real secret, so they remain subject to the entropy veto.
-    weak_signal = has_sentinel or has_word
+    strong_signal = is_dev_path or has_template
+    # Weak signals are substring/context guesses that can coincidentally
+    # co-occur with a real secret (e.g. a localhost reference living in the
+    # same evidence span as a high-entropy production credential), so they
+    # remain subject to the entropy veto below.
+    weak_signal = has_sentinel or has_word or has_localhost
 
     # max() over an empty sequence would raise; no candidate values means no
     # entropy evidence exists, so the counter-signal cannot fire.
