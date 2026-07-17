@@ -57,6 +57,14 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _sanitize_for_terminal(text: str) -> str:
+    """Replace non-printable characters (ANSI escapes, newlines, control
+    bytes) with U+FFFD so untrusted repo-derived strings can't inject
+    terminal escape sequences into the operator banner.
+    """
+    return "".join(ch if ch.isprintable() else "�" for ch in text)
+
+
 def _git_sha(repo_root: Path) -> str | None:
     try:
         proc = subprocess.run(
@@ -538,8 +546,11 @@ async def run_scan(cfg: Config) -> ScanResult:
         _index_extra_lines: list[str] = []
         if index_result and index_result.submodules_skipped:
             _subs = index_result.submodules_skipped
+            # Paths come from the untrusted target repo — sanitize before
+            # they reach the operator's terminal.
+            _safe_subs = ", ".join(_sanitize_for_terminal(p) for p in _subs)
             _index_extra_lines.append(
-                f"    submodules_skipped: {len(_subs)} ({', '.join(_subs)})"
+                f"    submodules_skipped: {len(_subs)} ({_safe_subs})"
             )
             _index_extra_lines.append(
                 "                        run `git submodule update --init "

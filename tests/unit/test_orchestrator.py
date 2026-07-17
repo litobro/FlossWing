@@ -1385,3 +1385,49 @@ def test_orchestrator_banner_lists_uninitialized_submodules(
     result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
     assert "submodules_skipped: 1" in result.summary
     assert "vendor/foo" in result.summary
+
+
+def test_orchestrator_banner_sanitizes_submodule_paths(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Submodule paths come from the untrusted target repo; control/escape
+    bytes must not reach the operator's terminal verbatim."""
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4, call_sites=2, entry_points=1, files_parsed=1,
+            files_skipped=0, duration_ms=10, languages=["python"],
+            submodules_skipped=["vendor/\x1b[31mevil\nspoof"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(processed=1, succeeded=1, findings=1)
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(processed=1, confirmed=1)
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    # Raw ESC and newline must not survive into the banner.
+    assert "\x1b" not in result.summary
+    assert "vendor/\x1b[31mevil\nspoof" not in result.summary
+    # The count still reflects the one skipped submodule.
+    assert "submodules_skipped: 1" in result.summary

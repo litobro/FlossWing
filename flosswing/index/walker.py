@@ -79,36 +79,55 @@ def walk(
         yield from _walk_manual(repo_root, languages_allowlist)
 
 
-def _walk_git(
-    repo_root: Path, languages_allowlist: set[str]
-) -> Iterator[tuple[Path, str]]:
-    """git ls-files -z mode."""
+def _git_ls_files(repo_root: Path, *, recurse: bool) -> bytes | None:
+    """Run `git ls-files -z` (optionally recursing into submodules).
+
+    Returns stdout bytes on success, or None on any failure so the caller can
+    fall back. Either form honours the target repo's `.gitignore`.
+    """
+    argv = ["git", "-C", str(repo_root), "ls-files", "-z"]
+    if recurse:
+        argv.append("--recurse-submodules")
+    label = "git ls-files --recurse-submodules" if recurse else "git ls-files"
     try:
         proc = subprocess.run(
-            [
-                "git", "-C", str(repo_root),
-                "ls-files", "-z", "--recurse-submodules",
-            ],
+            argv,
             capture_output=True,
             timeout=_GIT_LS_FILES_TIMEOUT_SECONDS,
             check=False,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as e:
-        logger.warning(
-            "git ls-files unavailable (%s); falling back to manual walk", e
-        )
-        yield from _walk_manual(repo_root, languages_allowlist)
-        return
+        logger.warning("%s unavailable (%s)", label, e)
+        return None
     if proc.returncode != 0:
-        logger.warning(
-            "git ls-files returned %d; falling back to manual walk",
-            proc.returncode,
-        )
+        logger.warning("%s returned %d", label, proc.returncode)
+        return None
+    return proc.stdout
+
+
+def _walk_git(
+    repo_root: Path, languages_allowlist: set[str]
+) -> Iterator[tuple[Path, str]]:
+    """git ls-files -z mode.
+
+    Prefers ``--recurse-submodules`` so initialized submodule files are
+    indexed. If that fails (git too old to know the flag, or a timeout on a
+    large submodule tree), retries plain ``git ls-files -z`` — which still
+    honours ``.gitignore`` — before dropping to the manual walk, which does
+    not. This keeps a recurse failure from silently pulling in vendored /
+    generated files the operator's `.gitignore` meant to exclude.
+    """
+    stdout = _git_ls_files(repo_root, recurse=True)
+    if stdout is None:
+        logger.warning("retrying git ls-files without --recurse-submodules")
+        stdout = _git_ls_files(repo_root, recurse=False)
+    if stdout is None:
+        logger.warning("git ls-files failed; falling back to manual walk")
         yield from _walk_manual(repo_root, languages_allowlist)
         return
 
     repo_resolved = repo_root.resolve()
-    for entry in proc.stdout.split(b"\x00"):
+    for entry in stdout.split(b"\x00"):
         if not entry:
             continue
         try:
@@ -121,7 +140,7 @@ def _walk_git(
             resolved = abs_path.resolve()
         except (OSError, RuntimeError):
             continue
-        if not str(resolved).startswith(str(repo_resolved)):
+        if not resolved.is_relative_to(repo_resolved):
             logger.warning("skipping out-of-tree path %r", rel)
             continue
         if not abs_path.is_file():
@@ -152,7 +171,7 @@ def _walk_manual(
                     resolved = child.resolve()
                 except (OSError, RuntimeError):
                     continue
-                if not str(resolved).startswith(str(repo_resolved)):
+                if not resolved.is_relative_to(repo_resolved):
                     continue
                 stack.append(child)
                 continue
@@ -181,6 +200,10 @@ def find_uninitialized_submodules(repo_root: Path) -> list[str]:
     non-git mode, on any git failure, or when there are no submodules.
     """
     if not (repo_root / ".git").exists():
+        return []
+    # No `.gitmodules` → the repo declares no submodules, so skip the extra
+    # full `git ls-files --stage` pass entirely (the common case).
+    if not (repo_root / ".gitmodules").exists():
         return []
     try:
         proc = subprocess.run(
@@ -211,9 +234,15 @@ def find_uninitialized_submodules(repo_root: Path) -> list[str]:
         try:
             rel = path_bytes.decode("utf-8")
         except UnicodeDecodeError:
+            # Can't reliably resolve a non-utf-8 path on disk, but silently
+            # dropping it would re-introduce the exact under-coverage this
+            # function exists to surface. Report it (display-safe) instead.
+            display = path_bytes.decode("utf-8", errors="replace")
             logger.warning(
-                "skipping non-utf-8 submodule path from git ls-files"
+                "submodule path is not valid utf-8; reporting as skipped: %s",
+                display,
             )
+            skipped.append(display)
             continue
         # A checked-out submodule work-tree has a `.git` file (or dir).
         if not (repo_root / rel / ".git").exists():
