@@ -239,7 +239,7 @@ def find_uninitialized_submodules(repo_root: Path) -> list[str]:
             # function exists to surface. Report it (display-safe) instead.
             display = path_bytes.decode("utf-8", errors="replace")
             logger.warning(
-                "submodule path is not valid utf-8; reporting as skipped: %s",
+                "submodule path is not valid utf-8; reporting as skipped: %r",
                 display,
             )
             skipped.append(display)
