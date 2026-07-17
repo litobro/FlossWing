@@ -28,9 +28,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from rich.style import Style
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.events import MouseMove
+from textual.events import MouseDown, MouseEvent, MouseMove, MouseUp
 from textual.screen import Screen
 from textual.widgets import DataTable, Input
 
@@ -61,34 +62,43 @@ class _TableApp(App[None]):
             t.add_row(Text(run_id), path)
 
 
-async def _drag(pilot: object, table: SelectableDataTable, y_from: int, y_to: int) -> None:
-    """Simulate a real mouse drag over the table from widget-row y_from to y_to.
-
-    y is a widget-relative row line: 0 = header, 1 = data row 0, etc.
+def _mouse_event(
+    kind: type[MouseEvent], table: SelectableDataTable, data_row: int, button: int
+) -> MouseEvent:
+    """Build a mouse event over ``data_row`` carrying the ``row``/``column``
+    metadata Textual embeds in DataTable cells. We set the metadata explicitly
+    rather than deriving it from the headless renderer, whose per-cell style
+    resolution is not deterministic across environments (it varies between a
+    local run and CI). The widget reads exactly this metadata from real terminal
+    events, so this faithfully exercises the drag pipeline.
     """
-    app = table.app
-    await pilot.mouse_down(table, offset=(1, y_from))  # type: ignore[attr-defined]
-    step = 1 if y_to >= y_from else -1
-    for y in range(y_from, y_to + step, step):
-        region = table.region
-        sx, sy = region.x + 1, region.y + y
-        move = MouseMove(
-            widget=table,
-            x=1,
-            y=y,
-            delta_x=0,
-            delta_y=step,
-            button=1,
-            shift=False,
-            meta=False,
-            ctrl=False,
-            screen_x=sx,
-            screen_y=sy,
-            style=app.screen.get_style_at(sx, sy),
-        )
-        table.post_message(move)
+    y = data_row + 1  # header occupies widget row 0
+    return kind(
+        widget=table,
+        x=1,
+        y=y,
+        delta_x=0,
+        delta_y=0,
+        button=button,
+        shift=False,
+        meta=False,
+        ctrl=False,
+        screen_x=1,
+        screen_y=y,
+        style=Style(meta={"row": data_row, "column": 0}),
+    )
+
+
+async def _drag(pilot: object, table: SelectableDataTable, row_from: int, row_to: int) -> None:
+    """Simulate a real mouse drag over the table from data row ``row_from`` to
+    ``row_to`` (inclusive), driving actual down / move / up events."""
+    table.post_message(_mouse_event(MouseDown, table, row_from, 1))
+    await pilot.pause()  # type: ignore[attr-defined]
+    step = 1 if row_to >= row_from else -1
+    for r in range(row_from, row_to + step, step):
+        table.post_message(_mouse_event(MouseMove, table, r, 1))
         await pilot.pause()  # type: ignore[attr-defined]
-    await pilot.mouse_up(table, offset=(1, y_to))  # type: ignore[attr-defined]
+    table.post_message(_mouse_event(MouseUp, table, row_to, 1))
     await pilot.pause()  # type: ignore[attr-defined]
 
 
@@ -98,8 +108,8 @@ async def test_drag_over_rows_copies_only_those_rows_full_values() -> None:
     async with app.run_test(size=(30, 12)) as pilot:
         await pilot.pause()
         t = app.query_one(SelectableDataTable)
-        # Drag over data rows 0..2 (widget y 1..3); row 3 must NOT be included.
-        await _drag(pilot, t, 1, 3)
+        # Drag over data rows 0..2; row 3 must NOT be included.
+        await _drag(pilot, t, 0, 2)
         assert app._clipboard == f"{_line(0)}\n{_line(1)}\n{_line(2)}"
 
 
@@ -109,7 +119,7 @@ async def test_drag_within_single_row_copies_that_row() -> None:
     async with app.run_test(size=(30, 12)) as pilot:
         await pilot.pause()
         t = app.query_one(SelectableDataTable)
-        await _drag(pilot, t, 2, 2)  # row 1 only
+        await _drag(pilot, t, 1, 1)  # row 1 only
         assert app._clipboard == _line(1)
 
 
@@ -119,7 +129,7 @@ async def test_upward_drag_copies_the_same_span() -> None:
     async with app.run_test(size=(30, 12)) as pilot:
         await pilot.pause()
         t = app.query_one(SelectableDataTable)
-        await _drag(pilot, t, 3, 1)  # drag upward over rows 2..0
+        await _drag(pilot, t, 2, 0)  # drag upward over rows 2..0
         assert app._clipboard == f"{_line(0)}\n{_line(1)}\n{_line(2)}"
 
 
@@ -129,7 +139,7 @@ async def test_ctrl_c_recopies_the_dragged_rows() -> None:
     async with app.run_test(size=(30, 12)) as pilot:
         await pilot.pause()
         t = app.query_one(SelectableDataTable)
-        await _drag(pilot, t, 1, 2)
+        await _drag(pilot, t, 0, 1)
         app._clipboard = ""  # clear, then re-copy via keyboard
         await pilot.press("ctrl+c")
         await pilot.pause()
@@ -199,10 +209,6 @@ def _isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(st_session, "_cached_session_factory", None, raising=False)
 
 
-async def _drag_probe(pilot: object, table: SelectableDataTable, y_from: int, y_to: int) -> None:
-    await _drag(pilot, table, y_from, y_to)
-
-
 @pytest.mark.asyncio
 async def test_ctrl_shift_c_copies_dragged_rows(_isolated_db: None) -> None:
     from flosswing.tui.app import FlosswingTUI
@@ -213,7 +219,7 @@ async def test_ctrl_shift_c_copies_dragged_rows(_isolated_db: None) -> None:
         app.push_screen(_CopyProbeScreen())
         await pilot.pause()
         table = app.screen.query_one("#probe", SelectableDataTable)
-        await _drag_probe(pilot, table, 1, 1)  # first data row
+        await _drag(pilot, table, 0, 0)  # first data row
         app._clipboard = ""
         await pilot.press("ctrl+shift+c")
         await pilot.pause()
