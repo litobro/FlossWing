@@ -109,7 +109,7 @@ def main(env_file: str | None, no_env_file: bool) -> None:
 @click.option(
     "--model",
     default=None,
-    help="Override the agent model (default claude-opus-4-7).",
+    help="Override the agent model (default from FLOSSWING_MODEL, else claude-opus-4-8).",
 )
 @click.option(
     "--provider",
