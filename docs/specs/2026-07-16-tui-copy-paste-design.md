@@ -69,12 +69,23 @@ drag; a plain click still moves the cursor and `enter` still opens the detail.
 - **Char-precise cell selection**: brittle over a virtualized / truncated /
   scrolling grid and copies truncated text; Textual itself punted on it.
 
+## `Ctrl+Shift+C` binding
+
+To honour the terminal-copy muscle memory, `FlosswingTUI` binds
+`ctrl+shift+c` → `screen.copy_text` (app-level, active on every screen),
+mirroring the built-in `ctrl+c`. Whether the key reaches the app depends on the
+terminal: emulators using the Kitty keyboard protocol (kitty, ghostty, foot,
+WezTerm, recent Alacritty) forward it and it copies the app selection via OSC
+52; terminals that intercept `Ctrl+Shift+C` as their own copy are unaffected
+(their native copy fires instead). With no selection the action is a no-op
+(`SkipAction`). `ctrl+c` remains the always-works path.
+
 ## Terminal fallback (documented, no code)
 
-For users who prefer their terminal's native copy: hold **Shift** while
+For users whose terminal intercepts `Ctrl+Shift+C`: hold **Shift** while
 dragging to bypass the app's mouse capture and make a real terminal selection,
 then `Ctrl+Shift+C` as usual. Caveat: copies raw on-screen text, so truncated
-cells copy truncated. This is added to the TUI docs, not implemented.
+cells copy truncated. Documented in the README.
 
 ## Testing
 

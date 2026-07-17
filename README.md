@@ -207,12 +207,18 @@ finding content can't inject terminal markup or open links.
 
 **Copy & paste.** Drag with the mouse to select text — including rows
 in the runs/findings/sessions tables, which copy their *full*,
-untruncated run IDs and paths — then press `ctrl+c` to copy to the
-system clipboard (over SSH too, via OSC 52). Paste works normally in
-the "new scan" input fields. If you prefer your terminal's own copy
-(`ctrl+shift+c`), hold **shift** while dragging to bypass the app's
-mouse capture and make a native terminal selection instead — note that
-copies the raw on-screen text, so truncated cells copy truncated.
+untruncated run IDs and paths — then press `ctrl+c` **or** `ctrl+shift+c`
+to copy to the system clipboard (over SSH too, via OSC 52). Paste works
+normally in the "new scan" input fields.
+
+`ctrl+shift+c` is your terminal's own copy shortcut, so whether it
+reaches the app depends on the terminal: terminals using the Kitty
+keyboard protocol (kitty, ghostty, foot, WezTerm, recent Alacritty)
+forward it and it copies the app selection; terminals that intercept it
+copy their *own* selection instead. To force the latter, hold **shift**
+while dragging to bypass the app's mouse capture and make a native
+terminal selection — note that copies the raw on-screen text, so
+truncated cells copy truncated. Either way, `ctrl+c` always works.
 
 ### Score against the eval corpus
 

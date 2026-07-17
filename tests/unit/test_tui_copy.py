@@ -18,10 +18,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.geometry import Offset
+from textual.screen import Screen
 from textual.selection import Selection
 from textual.widgets import DataTable, Input
 
@@ -155,3 +158,58 @@ async def test_input_accepts_pasted_text() -> None:
 def test_selectable_datatable_is_a_datatable() -> None:
     assert issubclass(SelectableDataTable, DataTable)
     assert SelectableDataTable.ALLOW_SELECT is True
+
+
+class _CopyProbeScreen(Screen[None]):
+    """A throwaway screen with one selectable table, pushed onto the real app
+    so the app-level ctrl+shift+c binding is exercised without RunsScreen's DB
+    polling re-populating the table underneath us."""
+
+    def compose(self) -> ComposeResult:
+        yield SelectableDataTable(id="probe")
+
+
+@pytest.fixture()
+def _isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Point the state DB at an empty temp file so the real RunsScreen mounts
+    # cleanly (and deterministically) instead of reading the operator's DB.
+    from flosswing.state import session as st_session
+
+    monkeypatch.setenv("FLOSSWING_DB_URL", f"sqlite:///{tmp_path}/state.db")
+    monkeypatch.setattr(st_session, "_cached_engine", None, raising=False)
+    monkeypatch.setattr(st_session, "_cached_session_factory", None, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_shift_c_copies_selection_to_clipboard(_isolated_db: None) -> None:
+    from flosswing.tui.app import FlosswingTUI
+
+    app = FlosswingTUI()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.push_screen(_CopyProbeScreen())
+        await pilot.pause()
+        table = app.screen.query_one("#probe", SelectableDataTable)
+        table.add_columns("run_id")
+        table.add_row(Text(_FULL_ID_0))
+        await pilot.pause()
+        app.screen.selections = {table: Selection(Offset(0, 1), Offset(5, 1))}
+        await pilot.press("ctrl+shift+c")
+        await pilot.pause()
+        # copy_to_clipboard records the last-copied text on the app.
+        assert app._clipboard == _FULL_ID_0
+
+
+@pytest.mark.asyncio
+async def test_ctrl_shift_c_with_no_selection_is_a_noop(_isolated_db: None) -> None:
+    from flosswing.tui.app import FlosswingTUI
+
+    app = FlosswingTUI()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        app.push_screen(_CopyProbeScreen())
+        await pilot.pause()
+        assert app._clipboard == ""
+        await pilot.press("ctrl+shift+c")
+        await pilot.pause()
+        assert app._clipboard == ""  # no selection -> nothing copied, no crash
