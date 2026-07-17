@@ -28,13 +28,23 @@ from typing import Any
 
 from flosswing.agent.providers import registry
 from flosswing.agent.providers.base import (  # re-exported for callers/tests
+    OnUsage,
     OutcomeLiteral,
     Provider,
     SessionResult,
+    UsageSnapshot,
     _classify,
 )
 
-__all__ = ["OutcomeLiteral", "Provider", "SessionResult", "_classify", "run_session"]
+__all__ = [
+    "OnUsage",
+    "OutcomeLiteral",
+    "Provider",
+    "SessionResult",
+    "UsageSnapshot",
+    "_classify",
+    "run_session",
+]
 
 
 async def run_session(
@@ -50,6 +60,7 @@ async def run_session(
     task_id: str | None = None,
     finding_id: str | None = None,
     agent_session_id: str | None = None,
+    on_usage: OnUsage | None = None,
     provider: str = "anthropic",
 ) -> SessionResult:
     """Drive one agent session via the selected provider (default anthropic)."""
@@ -66,4 +77,5 @@ async def run_session(
         task_id=task_id,
         finding_id=finding_id,
         agent_session_id=agent_session_id,
+        on_usage=on_usage,
     )

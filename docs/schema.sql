@@ -567,6 +567,55 @@ CREATE INDEX ix_agent_sessions_outcome ON agent_sessions(outcome);
 
 
 -- -----------------------------------------------------------------------------
+-- session_heartbeats: ephemeral in-flight-session ticker. NOT an audit log.
+-- -----------------------------------------------------------------------------
+--
+-- One row per run_id, upserted while an agent session is in flight (the
+-- provider calls back on every assistant turn) and DELETED in the SAME
+-- transaction as the terminal agent_sessions write once the session
+-- finalizes. Keyed by run_id (not agent_session_id) because the scan process
+-- runs stages strictly sequentially and, within Hunt/Validate, tasks/findings
+-- sequentially too — at most one session is ever in flight per run_id.
+--
+-- The TUI's live totals = SUM(agent_sessions) + this row, but ONLY when the
+-- run's PID-file liveness (runpid.py) reads 'live'. An orphaned row left by a
+-- crash/SIGKILL is therefore display-only noise, never counted; the
+-- orchestrator's finally also best-effort clears the row on any Python-level
+-- crash. cost_usd here is an interim estimate, superseded by the authoritative
+-- agent_sessions.cost_usd on finalize.
+
+CREATE TABLE session_heartbeats (
+    run_id              TEXT NOT NULL,
+    stage               TEXT NOT NULL,                   -- 'recon' | 'hunt' | 'validate' | 'gapfill' | 'dedupe' | 'trace'
+    task_id             TEXT,                            -- mirrors agent_sessions.task_id
+    finding_id          TEXT,                            -- mirrors agent_sessions.finding_id
+    agent_session_id    TEXT,                            -- the agent_sessions.id this heartbeat is for, when the
+                                                         -- stage pre-inserts that row (validate/dedupe/trace); NULL
+                                                         -- for insert-after stages. Lets the TUI hide the committed
+                                                         -- 0-token placeholder row while the live line is shown.
+    model               TEXT NOT NULL,
+    input_tokens        INTEGER NOT NULL DEFAULT 0,
+    output_tokens       INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL NOT NULL DEFAULT 0,          -- interim estimate; superseded on finalize
+    tool_calls_count    INTEGER NOT NULL DEFAULT 0,
+    started_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+
+    CONSTRAINT pk_session_heartbeats PRIMARY KEY (run_id),
+    CONSTRAINT fk_session_heartbeats_run_id_runs
+        FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE,
+    CONSTRAINT ck_session_heartbeats_stage
+        CHECK (stage IN ('recon', 'hunt', 'validate', 'gapfill', 'dedupe', 'trace')),
+    CONSTRAINT ck_session_heartbeats_tokens
+        CHECK (input_tokens >= 0 AND output_tokens >= 0 AND cache_read_tokens >= 0 AND cache_write_tokens >= 0),
+    CONSTRAINT ck_session_heartbeats_cost CHECK (cost_usd >= 0),
+    CONSTRAINT ck_session_heartbeats_tool_calls CHECK (tool_calls_count >= 0)
+);
+
+
+-- -----------------------------------------------------------------------------
 -- sandbox_runs: every compile_and_run invocation.
 -- -----------------------------------------------------------------------------
 --

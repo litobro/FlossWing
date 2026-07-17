@@ -136,11 +136,27 @@ async def test_validate_stage_processes_pending_findings_in_severity_order(
     created_at ASC."""
     run_id, _ = _seed_run_with_findings(severities=["low", "high", "medium"])
     seen_order: list[str] = []
+    from flosswing.agent.providers.base import UsageSnapshot
+    from flosswing.state.models import SessionHeartbeat
 
     async def fake_run_session(**kw: object) -> SessionResult:
         finding_id = kw["finding_id"]
         assert isinstance(finding_id, str)
         seen_order.append(finding_id)
+        # Pre-insert stage: a placeholder agent_sessions row already exists;
+        # writing the heartbeat here must not survive finalize.
+        on_usage = kw.get("on_usage")
+        assert callable(on_usage)
+        on_usage(
+            UsageSnapshot(
+                input_tokens=100,
+                output_tokens=50,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                tool_calls_count=1,
+                cost_usd=None,
+            )
+        )
         return SessionResult(
             outcome="completed",
             input_tokens=100,
@@ -164,6 +180,8 @@ async def test_validate_stage_processes_pending_findings_in_severity_order(
         session_factory=st_session.session_factory(),
     )
     assert result.findings_processed == 3
+    with st_session.session_scope() as s:
+        assert s.execute(select(SessionHeartbeat)).scalars().all() == []  # cleared
     # Per spec: severity DESC, created_at ASC. We seeded ["low", "high",
     # "medium"]. Expected order: high, medium, low.
     with st_session.session_scope() as s:

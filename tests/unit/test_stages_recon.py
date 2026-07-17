@@ -114,3 +114,65 @@ async def test_recon_stage_records_session_and_returns_summary(
         assert rows[0].input_tokens == 1000
         assert s.query(ReconArtifact).count() == 1
         assert s.query(HuntTask).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_recon_uses_authoritative_cost_and_clears_heartbeat(
+    fresh_db: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stage prefers SessionResult.cost_usd and clears the live heartbeat
+    atomically with the agent_sessions write."""
+    from flosswing.agent.providers.base import UsageSnapshot
+    from flosswing.state.models import SessionHeartbeat
+
+    async def fake_run_session(**kwargs: object) -> SessionResult:
+        # Simulate the provider streaming a live usage tick, which writes the
+        # in-flight heartbeat row via the stage-supplied callback.
+        on_usage = kwargs["on_usage"]
+        assert callable(on_usage)
+        on_usage(
+            UsageSnapshot(
+                input_tokens=500,
+                output_tokens=100,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                tool_calls_count=1,
+                cost_usd=None,
+            )
+        )
+        with st_session.session_scope() as s:
+            assert s.get(SessionHeartbeat, fresh_db) is not None  # ticking mid-session
+        return SessionResult(
+            outcome="completed",
+            input_tokens=500,
+            output_tokens=100,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            duration_ms=10,
+            tool_calls_count=1,
+            refusal_text=None,
+            error_text=None,
+            cost_usd=9.99,  # authoritative
+        )
+
+    monkeypatch.setattr(recon, "run_session", fake_run_session)
+    cfg = Config(
+        repo_root=tmp_path,
+        model="claude-opus-4-8",
+        recon_token_budget=200_000,
+        hunt_token_budget=200_000,
+        validate_token_budget=200_000,
+        gapfill_token_budget=1_000_000,
+        auth_env={"ANTHROPIC_API_KEY": "sk-test"},
+    )
+
+    result = await recon.run(run_id=fresh_db, cfg=cfg)
+
+    assert result.cost_usd == 9.99  # authoritative, not the token estimate
+    with st_session.session_scope() as s:
+        row = s.execute(select(AgentSession)).scalars().one()
+        assert row.cost_usd == 9.99
+        # Heartbeat cleared in the same transaction as the audit-row write.
+        assert s.get(SessionHeartbeat, fresh_db) is None

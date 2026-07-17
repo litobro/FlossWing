@@ -60,7 +60,7 @@ class RunDetailScreen(Screen[None]):
     def on_mount(self) -> None:
         table = self.query_one("#hunt-table", DataTable)
         table.add_columns("Attack class", "Scope", "Status", "Findings")
-        self._poll = self.set_interval(2.0, self.refresh_view)
+        self._poll = self.set_interval(data.POLL_INTERVAL_SECONDS, self.refresh_view)
         self.refresh_view()
 
     def refresh_view(self) -> None:
@@ -80,12 +80,20 @@ class RunDetailScreen(Screen[None]):
         strip.update(
             "  ".join(f"{_GLYPH.get(st.state, '?')} {st.name}" for st in p.stages)
         )
-        meta.update(
+        meta_text = (
             f"Hunt {p.hunt_done}/{p.hunt_total}   "
             f"findings {p.findings_total}   "
             f"tokens {p.tokens_used:,}   "
             f"cost ${p.cost_usd:.2f}"
         )
+        # Live rates appear only while the run is running and PID-file-live.
+        if p.tokens_per_sec is not None:
+            meta_text += f"   {p.tokens_per_sec:,.0f} tok/s"
+        if p.cost_per_min is not None:
+            meta_text += f"   ${p.cost_per_min:.3f}/min"
+        if p.projected_cost_usd is not None:
+            meta_text += f"   proj ~${p.projected_cost_usd:.2f}"
+        meta.update(meta_text)
         activity.update(self._activity_text())
         table = self.query_one("#hunt-table", DataTable)
         cursor = table.cursor_row
@@ -140,10 +148,19 @@ class RunDetailScreen(Screen[None]):
         as literal Text: refusal/error snippets are credential-scrubbed upstream
         but may still contain markup-like characters.
         """
+        live = data.live_session(self._run_id)
         sessions = data.list_sessions(self._run_id)
-        if not sessions:
+        if live is None and not sessions:
             return Text("no agent activity yet")
         lines: list[str] = []
+        # The in-flight session leads the feed with a live, ticking line; its
+        # cost is interim (estimated) until the session finalizes.
+        if live is not None:
+            lines.append(
+                f"▶ LIVE  {live.stage}  "
+                f"{live.input_tokens:,}/{live.output_tokens:,} tok  "
+                f"~${live.cost_usd:.2f}"
+            )
         for sr in sessions[-5:]:
             line = (
                 f"{sr.stage}  {sr.outcome}  "

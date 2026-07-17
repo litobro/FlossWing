@@ -35,9 +35,11 @@ from pathlib import Path
 from sqlalchemy import select
 from ulid import ULID
 
+from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
 from flosswing.agent.tool_registry import RegistryContext, build_recon_tools
 from flosswing.config import Config
+from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, HuntTask, ReconArtifact
 
@@ -75,21 +77,6 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _estimate_cost_usd(
-    *, model: str, input_tokens: int, output_tokens: int
-) -> float:
-    """Rough cost estimate. Updated when authoritative pricing wired in."""
-    # Per-million-token USD rates; placeholder, see Anthropic pricing.
-    rates = {
-        "claude-opus-4-7": (15.0, 75.0),
-        "claude-opus-4-8": (15.0, 75.0),
-        "claude-sonnet-4-6": (3.0, 15.0),
-        "claude-haiku-4-5": (0.80, 4.00),
-    }
-    in_rate, out_rate = rates.get(model, (15.0, 75.0))
-    return (input_tokens / 1_000_000) * in_rate + (output_tokens / 1_000_000) * out_rate
-
-
 async def run(*, run_id: str, cfg: Config) -> RunReconResult:
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
     prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
@@ -115,17 +102,25 @@ async def run(*, run_id: str, cfg: Config) -> RunReconResult:
         auth_env=cfg.auth_env,
         run_id=run_id,
         stage="recon",
+        on_usage=st_heartbeat.make_on_usage(
+            run_id=run_id, stage="recon", model=cfg.model
+        ),
     )
 
     finished_at = _now_iso()
-    cost = _estimate_cost_usd(
+    cost = pricing.resolve_cost_usd(
         model=cfg.model,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
+        cache_read_tokens=result.cache_read_tokens,
+        cache_write_tokens=result.cache_write_tokens,
+        authoritative=result.cost_usd,
     )
     # INSERT the audit row after the session completes so we can write the
     # final outcome directly. The schema's ck_agent_sessions_outcome CHECK
     # constraint only allows terminal values; there is no "running" state.
+    # Clearing the live heartbeat in the SAME transaction makes the swap from
+    # "in-flight ticker" to "committed audit row" atomic for the TUI.
     with st_session.session_scope() as s:
         s.add(
             AgentSession(
@@ -148,6 +143,7 @@ async def run(*, run_id: str, cfg: Config) -> RunReconResult:
                 finished_at=finished_at,
             )
         )
+        st_heartbeat.clear(s, run_id)
 
     # v0.5: pull artifact_id + languages so the orchestrator can drive
     # IndexBuild without re-querying. Recon may record zero or one

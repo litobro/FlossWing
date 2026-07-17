@@ -43,9 +43,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
+from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
 from flosswing.config import Config
 from flosswing.errors import FlosswingError, ToolValidationError
+from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, Trace
 from flosswing.tools import findings as t_findings
@@ -93,21 +95,6 @@ class TraceStageResult:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _estimate_cost_usd(
-    *, model: str, input_tokens: int, output_tokens: int
-) -> float:
-    rates = {
-        "claude-opus-4-7": (15.0, 75.0),
-        "claude-opus-4-8": (15.0, 75.0),
-        "claude-sonnet-4-6": (3.0, 15.0),
-        "claude-haiku-4-5": (0.80, 4.00),
-    }
-    in_rate, out_rate = rates.get(model, (15.0, 75.0))
-    return (input_tokens / 1_000_000) * in_rate + (
-        output_tokens / 1_000_000
-    ) * out_rate
 
 
 def _load_prompt(*, max_depth: int) -> tuple[str, str]:
@@ -525,12 +512,20 @@ async def run(
                 stage="trace",
                 finding_id=snap.id,
                 agent_session_id=agent_session_id,
+                on_usage=st_heartbeat.make_on_usage(
+                    run_id=run_id,
+                    stage="trace",
+                    model=cfg.model,
+                    finding_id=snap.id,
+                    agent_session_id=agent_session_id,
+                ),
             )
         except Exception:
             # Per spec § Failure modes: per-finding session crashes are
             # swallowed and counted; the stage continues. UPDATE the
             # pre-inserted agent_sessions row so it doesn't linger with
-            # placeholder counters.
+            # placeholder counters, and clear the live heartbeat in the same
+            # transaction so a crashed session leaves no stale ticker.
             findings_errored += 1
             finished_at = _now_iso()
             try:
@@ -539,6 +534,7 @@ async def run(
                     if sess is not None:
                         sess.outcome = "errored"
                         sess.finished_at = finished_at
+                    st_heartbeat.clear(s, run_id)
             except Exception:
                 # Best-effort cleanup; if the UPDATE also fails the
                 # row stays with the placeholder values.
@@ -546,15 +542,19 @@ async def run(
             continue
 
         finished_at = _now_iso()
-        cost = _estimate_cost_usd(
+        cost = pricing.resolve_cost_usd(
             model=cfg.model,
             input_tokens=session_result.input_tokens,
             output_tokens=session_result.output_tokens,
+            cache_read_tokens=session_result.cache_read_tokens,
+            cache_write_tokens=session_result.cache_write_tokens,
+            authoritative=session_result.cost_usd,
         )
         input_tokens_total += session_result.input_tokens
         output_tokens_total += session_result.output_tokens
 
-        # UPDATE the audit row with real outcome / usage / timestamps.
+        # UPDATE the audit row with real outcome / usage / timestamps, and clear
+        # the live heartbeat in the same transaction (atomic swap).
         with st_session.session_scope() as s:
             sess = s.get(AgentSession, agent_session_id)
             if sess is not None:
@@ -569,6 +569,7 @@ async def run(
                 sess.error_text = session_result.error_text
                 sess.tool_calls_count = session_result.tool_calls_count
                 sess.finished_at = finished_at
+            st_heartbeat.clear(s, run_id)
 
         # Classify per-finding outcome.
         if session_result.outcome == "refused":

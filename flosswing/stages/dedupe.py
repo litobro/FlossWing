@@ -43,9 +43,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
+from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
 from flosswing.config import Config
 from flosswing.errors import FlosswingError, ToolValidationError
+from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import (
     AgentSession,
@@ -107,21 +109,6 @@ class DedupeStageResult:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _estimate_cost_usd(
-    *, model: str, input_tokens: int, output_tokens: int
-) -> float:
-    rates = {
-        "claude-opus-4-7": (15.0, 75.0),
-        "claude-opus-4-8": (15.0, 75.0),
-        "claude-sonnet-4-6": (3.0, 15.0),
-        "claude-haiku-4-5": (0.80, 4.00),
-    }
-    in_rate, out_rate = rates.get(model, (15.0, 75.0))
-    return (input_tokens / 1_000_000) * in_rate + (
-        output_tokens / 1_000_000
-    ) * out_rate
 
 
 def _load_prompt() -> tuple[str, str]:
@@ -640,12 +627,21 @@ async def _pass2(
             run_id=run_id,
             stage="dedupe",
             agent_session_id=agent_session_id,
+            on_usage=st_heartbeat.make_on_usage(
+                run_id=run_id,
+                stage="dedupe",
+                model=cfg.model,
+                agent_session_id=agent_session_id,
+            ),
         )
         finished_at = _now_iso()
-        cost = _estimate_cost_usd(
+        cost = pricing.resolve_cost_usd(
             model=cfg.model,
             input_tokens=session_result.input_tokens,
             output_tokens=session_result.output_tokens,
+            cache_read_tokens=session_result.cache_read_tokens,
+            cache_write_tokens=session_result.cache_write_tokens,
+            authoritative=session_result.cost_usd,
         )
 
         after = _count_dedupe_writes(run_id)
@@ -655,7 +651,8 @@ async def _pass2(
         )
         link_delta = after.finding_link_count - before.finding_link_count
 
-        # UPDATE the audit row with real outcome / usage / timestamps.
+        # UPDATE the audit row with real outcome / usage / timestamps, and clear
+        # the live heartbeat in the same transaction (atomic swap).
         with st_session.session_scope() as s:
             sess = s.get(AgentSession, agent_session_id)
             if sess is not None:
@@ -670,6 +667,7 @@ async def _pass2(
                 sess.error_text = session_result.error_text
                 sess.tool_calls_count = session_result.tool_calls_count
                 sess.finished_at = finished_at
+            st_heartbeat.clear(s, run_id)
 
         # Classify per-cluster outcome. The runtime's 'timed_out' is
         # folded into 'errored' for the stage-level total — we don't

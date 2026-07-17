@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -44,15 +45,35 @@ from flosswing.state.models import (
     HuntTask,
     ReconArtifact,
     Run,
+    SessionHeartbeat,
     Symbol,
     Trace,
     Validation,
 )
 
+# Live-screen DB poll interval, in seconds. Single source of truth shared by
+# every polling screen (runs / run_detail / sessions) so the cadence stays
+# consistent and is tuned in one place.
+POLL_INTERVAL_SECONDS: float = 1.0
+
 
 def _short_id(run_id: str) -> str:
     """Last 8 chars of a ULID — enough to disambiguate in a list."""
     return run_id[-8:] if len(run_id) > 8 else run_id
+
+
+def _elapsed_seconds(started_at: str) -> float | None:
+    """Seconds since an ISO-8601 timestamp, or None if it can't be parsed.
+
+    Never raises into a poll: an unparseable timestamp yields None so callers
+    simply omit any rate that depends on it.
+    """
+    try:
+        start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        secs = (datetime.now(UTC) - start).total_seconds()
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return secs if secs > 0 else None
 
 
 def _liveness(run_id: str, status: str) -> str:
@@ -89,6 +110,7 @@ class RunRow:
     findings_count: int
     liveness: str  # "live" | "stale" | "unknown" | "done"
     tokens_used: int
+    cost_usd: float
     active_stage: str | None  # derived stage name for running rows, else None
 
 
@@ -115,6 +137,22 @@ def list_runs() -> list[RunRow]:
                     ),
                 ).group_by(AgentSession.run_id)
             ).all()
+        }
+        cost_sums: dict[str, float] = {
+            row[0]: float(row[1] or 0.0)
+            for row in s.execute(
+                select(
+                    AgentSession.run_id,
+                    func.coalesce(func.sum(AgentSession.cost_usd), 0.0),
+                ).group_by(AgentSession.run_id)
+            ).all()
+        }
+        # In-flight heartbeats (≤1 per run). Added to a run's totals only when
+        # that run is PID-file-live, so an orphan from a crash never inflates a
+        # dead run. Tiny table (one row per concurrently-running scan).
+        heartbeats: dict[str, SessionHeartbeat] = {
+            hb.run_id: hb
+            for hb in s.execute(select(SessionHeartbeat)).scalars().all()
         }
         # Stage-derivation evidence for the *active* stage only, gathered once
         # via grouped/DISTINCT queries (a fixed query count regardless of run
@@ -165,6 +203,14 @@ def list_runs() -> list[RunRow]:
                 active_stage = next(
                     (st.name for st in stages if st.state == "active"), None
                 )
+            liveness = _liveness(r.id, r.status)
+            tokens_used = int(token_sums.get(r.id, 0))
+            cost_usd = float(cost_sums.get(r.id, 0.0))
+            # Fold in the live in-flight session, but only for a live run.
+            hb = heartbeats.get(r.id)
+            if liveness == "live" and hb is not None:
+                tokens_used += hb.input_tokens + hb.output_tokens
+                cost_usd += hb.cost_usd
             rows.append(
                 RunRow(
                     id=r.id,
@@ -174,8 +220,9 @@ def list_runs() -> list[RunRow]:
                     started_at=r.started_at,
                     finished_at=r.finished_at,
                     findings_count=int(counts.get(r.id, 0)),
-                    liveness=_liveness(r.id, r.status),
-                    tokens_used=int(token_sums.get(r.id, 0)),
+                    liveness=liveness,
+                    tokens_used=tokens_used,
+                    cost_usd=cost_usd,
                     active_stage=active_stage,
                 )
             )
@@ -210,6 +257,13 @@ class RunProgress:
     hunt_total: int
     tokens_used: int
     cost_usd: float
+    # Live rates, present only while the run is running and PID-file-live; None
+    # otherwise (a finished/stale run has no meaningful instantaneous rate).
+    tokens_per_sec: float | None
+    cost_per_min: float | None
+    # Rough projected total run cost, extrapolated linearly from Hunt
+    # completion fraction. None until at least one Hunt task has finished.
+    projected_cost_usd: float | None
     findings_total: int
     findings_by_status: dict[str, int]
     hunt_tasks: list[HuntTaskRow]
@@ -357,6 +411,25 @@ def run_progress(run_id: str) -> RunProgress | None:
             or 0.0
         )
 
+        # Fold in the live in-flight session (only when the run is live) so the
+        # counters tick up during a long session, not just at its boundary.
+        liveness = _liveness(run_id, run.status)
+        tokens_per_sec: float | None = None
+        cost_per_min: float | None = None
+        if liveness == "live":
+            hb = s.get(SessionHeartbeat, run_id)
+            if hb is not None:
+                tokens_used += hb.input_tokens + hb.output_tokens
+                cost_usd += hb.cost_usd
+            elapsed = _elapsed_seconds(run.started_at)
+            if elapsed is not None:
+                tokens_per_sec = tokens_used / elapsed
+                cost_per_min = cost_usd / elapsed * 60.0
+        # Linear projection from Hunt burn rate; None until a task has finished.
+        projected_cost_usd: float | None = None
+        if hunt_total > 0 and hunt_done > 0:
+            projected_cost_usd = cost_usd * hunt_total / hunt_done
+
         stages = _derive_stages(
             run_running=run_running,
             recon_done=recon_done,
@@ -374,7 +447,7 @@ def run_progress(run_id: str) -> RunProgress | None:
             short_id=_short_id(run.id),
             target_repo_path=run.target_repo_path,
             status=run.status,
-            liveness=_liveness(run.id, run.status),
+            liveness=liveness,
             started_at=run.started_at,
             finished_at=run.finished_at,
             stages=stages,
@@ -382,6 +455,9 @@ def run_progress(run_id: str) -> RunProgress | None:
             hunt_total=hunt_total,
             tokens_used=tokens_used,
             cost_usd=cost_usd,
+            tokens_per_sec=tokens_per_sec,
+            cost_per_min=cost_per_min,
+            projected_cost_usd=projected_cost_usd,
             findings_total=findings_total,
             findings_by_status=by_status,
             hunt_tasks=hunt_tasks,
@@ -515,8 +591,21 @@ class SessionRow:
 
 
 def list_sessions(run_id: str) -> list[SessionRow]:
-    """Agent sessions for a run, ordered by start time."""
+    """Agent sessions for a run, ordered by start time.
+
+    While a live session is in flight, the pre-insert stages (validate/dedupe/
+    trace) have a committed placeholder agent_sessions row (0 tokens, a
+    placeholder 'completed' outcome) that the live line already represents. We
+    hide that one row so the operator doesn't see a contradictory "completed
+    0/0 tok $0.00" entry next to the live ticker.
+    """
     with st_session.session_scope() as s:
+        run = s.get(Run, run_id)
+        hidden_id: str | None = None
+        if run is not None and _liveness(run_id, run.status) == "live":
+            hb = s.get(SessionHeartbeat, run_id)
+            if hb is not None:
+                hidden_id = hb.agent_session_id
         rows = (
             s.execute(
                 select(AgentSession)
@@ -538,4 +627,53 @@ def list_sessions(run_id: str) -> list[SessionRow]:
                 error_text=r.error_text,
             )
             for r in rows
+            if r.id != hidden_id
         ]
+
+
+@dataclass(frozen=True)
+class LiveSessionRow:
+    """Snapshot of the currently in-flight session (the heartbeat row).
+
+    cost_usd here is interim (estimated from tokens until the session finalizes
+    with the authoritative figure). Only ever returned for a live run.
+    """
+
+    stage: str
+    task_id: str | None
+    finding_id: str | None
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    tool_calls_count: int
+    started_at: str
+    updated_at: str
+
+
+def live_session(run_id: str) -> LiveSessionRow | None:
+    """The in-flight session for a run, or None.
+
+    Returns None unless the run exists, is PID-file-live, and has a heartbeat
+    row. The liveness gate is what keeps an orphaned heartbeat (from a crash)
+    out of the live view.
+    """
+    with st_session.session_scope() as s:
+        run = s.get(Run, run_id)
+        if run is None or _liveness(run_id, run.status) != "live":
+            return None
+        hb = s.get(SessionHeartbeat, run_id)
+        if hb is None:
+            return None
+        return LiveSessionRow(
+            stage=hb.stage,
+            task_id=hb.task_id,
+            finding_id=hb.finding_id,
+            model=hb.model,
+            input_tokens=hb.input_tokens,
+            output_tokens=hb.output_tokens,
+            cost_usd=hb.cost_usd,
+            tool_calls_count=hb.tool_calls_count,
+            started_at=hb.started_at,
+            updated_at=hb.updated_at,
+        )

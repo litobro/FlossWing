@@ -1431,3 +1431,46 @@ def test_orchestrator_banner_sanitizes_submodule_paths(
     assert "vendor/\x1b[31mevil\nspoof" not in result.summary
     # The count still reflects the one skipped submodule.
     assert "submodules_skipped: 1" in result.summary
+
+
+def test_orchestrator_finally_sweeps_orphaned_heartbeat(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If a stage crashes mid-session leaving an in-flight heartbeat row, the
+    orchestrator's finally sweeps it (clear_run) so no orphan lingers."""
+    from datetime import UTC, datetime
+
+    from flosswing import orchestrator
+    from flosswing.stages import recon as recon_stage
+    from flosswing.state.models import SessionHeartbeat
+
+    def _now() -> str:
+        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        run_id = kwargs["run_id"]
+        assert isinstance(run_id, str)
+        # Simulate an in-flight heartbeat that never got cleared because the
+        # stage then crashed before its finalize transaction.
+        with st_session.session_scope() as s:
+            s.add(
+                SessionHeartbeat(
+                    run_id=run_id,
+                    stage="recon",
+                    model="claude-opus-4-7",
+                    input_tokens=10,
+                    output_tokens=5,
+                    cost_usd=0.01,
+                    started_at=_now(),
+                    updated_at=_now(),
+                )
+            )
+        raise RuntimeError("recon blew up after writing a heartbeat")
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+
+    with st_session.session_scope() as s:
+        assert s.query(SessionHeartbeat).all() == []  # swept by the finally

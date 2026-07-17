@@ -237,6 +237,8 @@ async def test_dedupe_run_pass1_commits_before_pass2(
     _seed_finding(run_id=run_id, task_id=task_id, line_start=13, line_end=15)
 
     observed_clusters: list[int] = []
+    from flosswing.agent.providers.base import UsageSnapshot
+    from flosswing.state.models import SessionHeartbeat
 
     async def fake_run_session(**kw: object) -> SessionResult:
         # At session start, Pass 1 should have committed at least one
@@ -250,6 +252,18 @@ async def test_dedupe_run_pass1_commits_before_pass2(
                 ).scalars().all()
             )
         observed_clusters.append(len(rows))
+        on_usage = kw.get("on_usage")
+        assert callable(on_usage)
+        on_usage(
+            UsageSnapshot(
+                input_tokens=100,
+                output_tokens=50,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                tool_calls_count=1,
+                cost_usd=None,
+            )
+        )
         return _benign_session_result()
 
     monkeypatch.setattr(
@@ -270,6 +284,8 @@ async def test_dedupe_run_pass1_commits_before_pass2(
     assert result.clusters_reviewed == 1
     # The stub saw the committed cluster row before Pass 2's session ran.
     assert observed_clusters == [1]
+    with st_session.session_scope() as s:
+        assert s.execute(select(SessionHeartbeat)).scalars().all() == []  # cleared
 
 
 @pytest.mark.asyncio
