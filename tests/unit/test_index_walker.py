@@ -97,6 +97,7 @@ def test_walker_git_mode_used_when_dot_git_exists(tmp_path: Path) -> None:
     assert cmd[0] == "git"
     assert "ls-files" in cmd
     assert "-z" in cmd
+    assert "--recurse-submodules" in cmd
     assert files == ["src/example/cli.py", "src/example/util.py"]
 
 
@@ -165,3 +166,150 @@ def test_walker_handles_empty_allowlist(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, {"src/main.py": "pass\n"})
     files = list(walker.walk(repo, languages_allowlist=set()))
     assert files == []
+
+
+def test_walker_git_mode_recurses_submodules(tmp_path: Path) -> None:
+    """--recurse-submodules is passed and submodule files are yielded."""
+    repo = _make_git_repo(tmp_path, {
+        "glue.py": "pass\n",
+        "vendor/lib/mod.py": "def f(): pass\n",  # inside a submodule work-tree
+    })
+    fake_output = b"glue.py\x00vendor/lib/mod.py\x00"
+    fake_proc = MagicMock(returncode=0, stdout=fake_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc) as m:
+        files = sorted(
+            str(p.relative_to(repo)) for p, _ in walker.walk(
+                repo, languages_allowlist={"python"}
+            )
+        )
+    args, _ = m.call_args
+    assert "--recurse-submodules" in args[0]
+    assert files == ["glue.py", "vendor/lib/mod.py"]
+
+
+def test_find_uninitialized_submodules_reports_unchecked_out(
+    tmp_path: Path,
+) -> None:
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
+    # ext/bar is a checked-out submodule (has a .git marker file);
+    # vendor/foo is declared but never initialized (no working tree).
+    (repo / "ext" / "bar").mkdir(parents=True)
+    (repo / "ext" / "bar" / ".git").write_text("gitdir: ../.git/modules/bar\n")
+    stage_output = (
+        b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
+        b"160000 2222222222222222222222222222222222222222 0\tvendor/foo\x00"
+        b"160000 3333333333333333333333333333333333333333 0\text/bar\x00"
+    )
+    fake_proc = MagicMock(returncode=0, stdout=stage_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        result = walker.find_uninitialized_submodules(repo)
+    assert result == ["vendor/foo"]
+
+
+def test_find_uninitialized_submodules_empty_without_submodules(
+    tmp_path: Path,
+) -> None:
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
+    stage_output = (
+        b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
+    )
+    fake_proc = MagicMock(returncode=0, stdout=stage_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        assert walker.find_uninitialized_submodules(repo) == []
+
+
+def test_find_uninitialized_submodules_empty_in_non_git_mode(
+    tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path, {"src/keep.py": "pass\n"})  # no .git
+    with patch.object(subprocess, "run") as m:
+        assert walker.find_uninitialized_submodules(repo) == []
+    assert not m.called  # short-circuits before shelling out
+
+
+def test_find_uninitialized_submodules_empty_on_git_failure(
+    tmp_path: Path,
+) -> None:
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
+    fake_proc = MagicMock(returncode=128, stdout=b"", stderr=b"fatal")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        assert walker.find_uninitialized_submodules(repo) == []
+
+
+def test_walker_git_mode_excludes_sibling_prefix_escape(
+    tmp_path: Path,
+) -> None:
+    """A symlink resolving into a sibling dir with a shared path prefix
+    (repo vs repo-x) must be treated as out-of-tree, not indexed."""
+    repo = _make_git_repo(tmp_path, {"keep.py": "pass\n"})
+    sibling = tmp_path / "repo-x"  # shares the "repo" string prefix
+    sibling.mkdir()
+    (sibling / "secret.py").write_text("SECRET = 1\n")
+    (repo / "link.py").symlink_to(sibling / "secret.py")
+    fake_output = b"keep.py\x00link.py\x00"
+    fake_proc = MagicMock(returncode=0, stdout=fake_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        resolved = [
+            str(p.resolve())
+            for p, _ in walker.walk(repo, languages_allowlist={"python"})
+        ]
+    assert str((sibling / "secret.py").resolve()) not in resolved
+    assert resolved == [str((repo / "keep.py").resolve())]
+
+
+def test_walker_git_mode_retries_without_recurse_on_flag_failure(
+    tmp_path: Path,
+) -> None:
+    """If --recurse-submodules fails, retry plain git ls-files (which still
+    honours .gitignore) before dropping to the manual walk."""
+    repo = _make_git_repo(tmp_path, {
+        "tracked.py": "pass\n",
+        "generated.py": "pass\n",  # a manual walk would wrongly include this
+    })
+    fail = MagicMock(returncode=129, stdout=b"", stderr=b"error: unknown option")
+    ok = MagicMock(returncode=0, stdout=b"tracked.py\x00", stderr=b"")
+    with patch.object(subprocess, "run", side_effect=[fail, ok]) as m:
+        files = sorted(
+            str(p.relative_to(repo)) for p, _ in walker.walk(
+                repo, languages_allowlist={"python"}
+            )
+        )
+    assert m.call_count == 2
+    assert "--recurse-submodules" not in m.call_args_list[1].args[0]
+    # git-mode result honoured (generated.py excluded); NOT the manual walk.
+    assert files == ["tracked.py"]
+
+
+def test_find_uninitialized_submodules_detects_gitlink_without_gitmodules(
+    tmp_path: Path,
+) -> None:
+    """Gitlinks can exist in the index even without a tracked .gitmodules
+    (sparse/partial checkouts, malformed repos); the scan must still run so an
+    uninitialized submodule is never silently under-covered."""
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})  # no .gitmodules
+    stage_output = (
+        b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
+        b"160000 2222222222222222222222222222222222222222 0\tvendor/foo\x00"
+    )
+    fake_proc = MagicMock(returncode=0, stdout=stage_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        result = walker.find_uninitialized_submodules(repo)
+    assert result == ["vendor/foo"]
+
+
+def test_find_uninitialized_submodules_reports_non_utf8_path(
+    tmp_path: Path,
+) -> None:
+    """A non-utf-8 gitlink path must still surface (display-safe), never be
+    silently dropped — that is the exact under-coverage this helper exists
+    to prevent."""
+    repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
+    stage_output = (
+        b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
+        b"160000 2222222222222222222222222222222222222222 0\tvendor/\xff\xfe\x00"
+    )
+    fake_proc = MagicMock(returncode=0, stdout=stage_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        result = walker.find_uninitialized_submodules(repo)
+    assert len(result) == 1
+    assert "�" in result[0]  # undecodable bytes shown as replacement char

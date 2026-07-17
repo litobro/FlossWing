@@ -70,6 +70,7 @@ class IndexBuildResult:
     files_skipped: int = 0
     duration_ms: int = 0
     languages: list[str] = field(default_factory=list)
+    submodules_skipped: list[str] = field(default_factory=list)
 
 
 async def build_index(
@@ -156,6 +157,10 @@ async def build_index(
             f"extracted symbols={len(symbol_rows)} "
             f"call_sites={len(call_site_rows)}",
         )
+
+        submodules_skipped = walker_mod.find_uninitialized_submodules(repo)
+        for _sub in submodules_skipped:
+            _log(log_fh, f"submodule not checked out, skipped: {_sub!r}")
 
         # Detect entry points before writing — runs against the in-memory rows
         # so that `attacker_controlled_input` etc. can be computed without a DB
@@ -301,6 +306,7 @@ async def build_index(
             files_skipped=files_skipped,
             duration_ms=duration_ms,
             languages=sorted(languages),
+            submodules_skipped=submodules_skipped,
         )
     finally:
         log_fh.close()

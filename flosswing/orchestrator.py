@@ -57,6 +57,14 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _sanitize_for_terminal(text: str) -> str:
+    """Replace non-printable characters (ANSI escapes, newlines, control
+    bytes) with U+FFFD so untrusted repo-derived strings can't inject
+    terminal escape sequences into the operator banner.
+    """
+    return "".join(ch if ch.isprintable() else "�" for ch in text)
+
+
 def _git_sha(repo_root: Path) -> str | None:
     try:
         proc = subprocess.run(
@@ -535,6 +543,20 @@ async def run_scan(cfg: Config) -> ScanResult:
         if _deployment:  # truthiness matches the report header (report.py)
             _model_line += f" -> foundry deployment: {_deployment}"
 
+        _index_extra_lines: list[str] = []
+        if index_result and index_result.submodules_skipped:
+            _subs = index_result.submodules_skipped
+            # Paths come from the untrusted target repo — sanitize before
+            # they reach the operator's terminal.
+            _safe_subs = ", ".join(_sanitize_for_terminal(p) for p in _subs)
+            _index_extra_lines.append(
+                f"    submodules_skipped: {len(_subs)} ({_safe_subs})"
+            )
+            _index_extra_lines.append(
+                "                        run `git submodule update --init "
+                "--recursive` to include them"
+            )
+
         summary_lines = [
             f"Run {run_id} {final_status}.",
             _model_line,
@@ -552,6 +574,7 @@ async def run_scan(cfg: Config) -> ScanResult:
             f"    files_parsed:      {index_result.files_parsed if index_result else 0}",
             f"    files_skipped:     {index_result.files_skipped if index_result else 0}",
             f"    duration_ms:       {index_result.duration_ms if index_result else 0}",
+            *_index_extra_lines,
             "  hunt:",
             f"    tasks processed:    {hunt_result.tasks_processed}",
             f"    succeeded:          {hunt_result.tasks_succeeded}",
