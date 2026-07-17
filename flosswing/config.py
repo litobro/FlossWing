@@ -74,10 +74,11 @@ DEFAULT_OUTPUT_DIR: Path | None = None
 DEFAULT_PROVIDER: str = "anthropic"
 PROVIDER_ENV_VAR: str = "FLOSSWING_PROVIDER"
 
-# The default `.env` auto-load (flosswing/cli.py) is restricted to this
-# allowlist. Derived from the Anthropic provider's declared keys so a future
-# real provider extends it just by declaring auth_env_keys. FLOSSWING_PROVIDER
-# is intentionally NOT here: provider selection is not a credential and must
+# The Anthropic provider's declared credential keys. Derived from the provider
+# so a future real provider extends it just by declaring auth_env_keys. The
+# default `.env` auto-load (flosswing/cli.py) is restricted to DOTENV_ALLOWED_KEYS
+# below (these auth keys plus config keys), not this set directly. FLOSSWING_PROVIDER
+# is intentionally in neither: provider selection is not a credential and must
 # not be settable by an auto-loaded .env.
 AUTH_ENV_KEYS: frozenset[str] = AnthropicSDKProvider.auth_env_keys
 
