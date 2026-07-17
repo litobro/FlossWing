@@ -191,7 +191,6 @@ def test_find_uninitialized_submodules_reports_unchecked_out(
     tmp_path: Path,
 ) -> None:
     repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
-    (repo / ".gitmodules").write_text("")  # submodules declared
     # ext/bar is a checked-out submodule (has a .git marker file);
     # vendor/foo is declared but never initialized (no working tree).
     (repo / "ext" / "bar").mkdir(parents=True)
@@ -211,7 +210,6 @@ def test_find_uninitialized_submodules_empty_without_submodules(
     tmp_path: Path,
 ) -> None:
     repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
-    (repo / ".gitmodules").write_text("")
     stage_output = (
         b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
     )
@@ -233,7 +231,6 @@ def test_find_uninitialized_submodules_empty_on_git_failure(
     tmp_path: Path,
 ) -> None:
     repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
-    (repo / ".gitmodules").write_text("")
     fake_proc = MagicMock(returncode=128, stdout=b"", stderr=b"fatal")
     with patch.object(subprocess, "run", return_value=fake_proc):
         assert walker.find_uninitialized_submodules(repo) == []
@@ -283,14 +280,21 @@ def test_walker_git_mode_retries_without_recurse_on_flag_failure(
     assert files == ["tracked.py"]
 
 
-def test_find_uninitialized_submodules_skips_without_gitmodules(
+def test_find_uninitialized_submodules_detects_gitlink_without_gitmodules(
     tmp_path: Path,
 ) -> None:
-    """No .gitmodules → no submodules declared → skip the git subprocess."""
+    """Gitlinks can exist in the index even without a tracked .gitmodules
+    (sparse/partial checkouts, malformed repos); the scan must still run so an
+    uninitialized submodule is never silently under-covered."""
     repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})  # no .gitmodules
-    with patch.object(subprocess, "run") as m:
-        assert walker.find_uninitialized_submodules(repo) == []
-    assert not m.called
+    stage_output = (
+        b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
+        b"160000 2222222222222222222222222222222222222222 0\tvendor/foo\x00"
+    )
+    fake_proc = MagicMock(returncode=0, stdout=stage_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc):
+        result = walker.find_uninitialized_submodules(repo)
+    assert result == ["vendor/foo"]
 
 
 def test_find_uninitialized_submodules_reports_non_utf8_path(
@@ -300,7 +304,6 @@ def test_find_uninitialized_submodules_reports_non_utf8_path(
     silently dropped — that is the exact under-coverage this helper exists
     to prevent."""
     repo = _make_git_repo(tmp_path, {"src/keep.py": "pass\n"})
-    (repo / ".gitmodules").write_text("")
     stage_output = (
         b"100644 1111111111111111111111111111111111111111 0\tsrc/keep.py\x00"
         b"160000 2222222222222222222222222222222222222222 0\tvendor/\xff\xfe\x00"

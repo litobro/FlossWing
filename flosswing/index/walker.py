@@ -198,12 +198,14 @@ def find_uninitialized_submodules(repo_root: Path) -> list[str]:
     Enumerates gitlink entries (mode 160000) via `git ls-files --stage` and
     returns those whose working tree lacks a `.git` entry. Returns [] in
     non-git mode, on any git failure, or when there are no submodules.
+
+    Gating on `.gitmodules` existence is deliberately avoided: gitlink entries
+    can be present in the index without a tracked `.gitmodules` (sparse/partial
+    checkouts, malformed repos), and skipping the scan there would reintroduce
+    the silent under-coverage this helper exists to prevent. The scan runs
+    whenever git mode is enabled.
     """
     if not (repo_root / ".git").exists():
-        return []
-    # No `.gitmodules` → the repo declares no submodules, so skip the extra
-    # full `git ls-files --stage` pass entirely (the common case).
-    if not (repo_root / ".gitmodules").exists():
         return []
     try:
         proc = subprocess.run(
