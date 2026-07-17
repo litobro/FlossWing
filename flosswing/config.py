@@ -54,7 +54,12 @@ from flosswing.agent.providers import registry
 from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
 from flosswing.errors import ProviderNotImplementedError
 
-DEFAULT_MODEL: str = "claude-opus-4-7"
+DEFAULT_MODEL: str = "claude-opus-4-8"
+
+# Operator-settable default model (overridden by the --model flag). Loadable
+# from a working-directory .env (see DOTENV_ALLOWED_KEYS).
+MODEL_ENV_VAR: str = "FLOSSWING_MODEL"
+
 DEFAULT_RECON_TOKEN_BUDGET: int = 200_000
 DEFAULT_HUNT_TOKEN_BUDGET: int = 200_000
 DEFAULT_VALIDATE_TOKEN_BUDGET: int = 100_000
@@ -127,7 +132,7 @@ def resolve(
 
     return Config(
         repo_root=repo_root,
-        model=model or DEFAULT_MODEL,
+        model=model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL,
         recon_token_budget=(
             recon_token_budget
             if recon_token_budget is not None
