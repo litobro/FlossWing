@@ -13,7 +13,11 @@ configuration or environment at deploy time. The finding must argue *how
 the value reaches production* — which prod code reads it, and why a
 deployment would not replace it.
 
-## Disqualifiers — do NOT confirm at high/medium (report at `info` or reject)
+## Disqualifiers — do NOT confirm at high/medium
+
+Treat these as low-signal: Hunt should set `severity='info'`; Validate
+should `reject` (or `uncertain` if unsure), since the pipeline already
+downgrades recognised dev/placeholder values automatically.
 
 - **Self-describing placeholders / vendor defaults:** `changeme`,
   `change_me`, `Ch@ngeTh!sPa33w0rd`, `devpass`, `password`, `admin`,
