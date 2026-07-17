@@ -1344,3 +1344,44 @@ def test_pid_file_written_before_run_row_committed(
     asyncio.run(orchestrator.run_scan(cfg))
     # The Run row must NOT yet be committed when the PID file is written.
     assert row_absent_at_write == [True]
+
+
+def test_orchestrator_banner_lists_uninitialized_submodules(
+    fresh_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing import orchestrator
+    from flosswing.index.build import IndexBuildResult
+    from flosswing.stages import gapfill as gapfill_stage
+    from flosswing.stages import hunt as hunt_stage
+    from flosswing.stages import index_build as index_build_stage
+    from flosswing.stages import recon as recon_stage
+    from flosswing.stages import validate as validate_stage
+
+    async def fake_recon(**kwargs: object) -> RunReconResult:
+        return _recon_with_index()
+
+    async def fake_index_build(**kwargs: object) -> IndexBuildResult:
+        return IndexBuildResult(
+            symbols=4, call_sites=2, entry_points=1, files_parsed=1,
+            files_skipped=0, duration_ms=10, languages=["python"],
+            submodules_skipped=["vendor/foo"],
+        )
+
+    async def fake_hunt(**kwargs: object) -> HuntStageResult:
+        return _hunt(processed=1, succeeded=1, findings=1)
+
+    async def fake_validate(**kwargs: object) -> ValidateStageResult:
+        return _validate(processed=1, confirmed=1)
+
+    async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
+        return _gapfill()
+
+    monkeypatch.setattr(recon_stage, "run", fake_recon)
+    monkeypatch.setattr(index_build_stage, "run", fake_index_build)
+    monkeypatch.setattr(hunt_stage, "run", fake_hunt)
+    monkeypatch.setattr(validate_stage, "run", fake_validate)
+    monkeypatch.setattr(gapfill_stage, "run", fake_gapfill)
+
+    result = asyncio.run(orchestrator.run_scan(_cfg(tmp_path)))
+    assert "submodules_skipped: 1" in result.summary
+    assert "vendor/foo" in result.summary

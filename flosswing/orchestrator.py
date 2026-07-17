@@ -535,6 +535,17 @@ async def run_scan(cfg: Config) -> ScanResult:
         if _deployment:  # truthiness matches the report header (report.py)
             _model_line += f" -> foundry deployment: {_deployment}"
 
+        _index_extra_lines: list[str] = []
+        if index_result and index_result.submodules_skipped:
+            _subs = index_result.submodules_skipped
+            _index_extra_lines.append(
+                f"    submodules_skipped: {len(_subs)} ({', '.join(_subs)})"
+            )
+            _index_extra_lines.append(
+                "                        run `git submodule update --init "
+                "--recursive` to include them"
+            )
+
         summary_lines = [
             f"Run {run_id} {final_status}.",
             _model_line,
@@ -552,6 +563,7 @@ async def run_scan(cfg: Config) -> ScanResult:
             f"    files_parsed:      {index_result.files_parsed if index_result else 0}",
             f"    files_skipped:     {index_result.files_skipped if index_result else 0}",
             f"    duration_ms:       {index_result.duration_ms if index_result else 0}",
+            *_index_extra_lines,
             "  hunt:",
             f"    tasks processed:    {hunt_result.tasks_processed}",
             f"    succeeded:          {hunt_result.tasks_succeeded}",
