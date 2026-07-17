@@ -160,7 +160,7 @@ async def build_index(
 
         submodules_skipped = walker_mod.find_uninitialized_submodules(repo)
         for _sub in submodules_skipped:
-            _log(log_fh, f"submodule not checked out, skipped: {_sub}")
+            _log(log_fh, f"submodule not checked out, skipped: {_sub!r}")
 
         # Detect entry points before writing — runs against the in-memory rows
         # so that `attacker_controlled_input` etc. can be computed without a DB
