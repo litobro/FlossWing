@@ -131,6 +131,22 @@ async def test_runs_screen_lists_run(seeded_db: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runs_screen_renders_cost_column(seeded_db: str) -> None:
+    """The Cost column (index 7) renders the run's summed cost as $X.XX."""
+    from rich.style import Style
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#runs-table", DataTable)
+        lines = table._render_cell(0, 7, Style(), width=10)
+        rendered = "".join(seg.text for line in lines for seg in line)
+        assert "$0.02" in rendered  # seeded session cost_usd == 0.02
+
+
+@pytest.mark.asyncio
 async def test_run_detail_shows_stage_strip(seeded_db: str) -> None:
     from flosswing.tui.screens.run_detail import RunDetailScreen
 
@@ -159,6 +175,71 @@ async def test_sessions_screen_lists_session(seeded_db: str) -> None:
 
         table = app.screen.query_one("#sessions-table", DataTable)
         assert table.row_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sessions_screen_shows_live_row(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A running run with a live heartbeat gets a synthetic '● live' row."""
+    from flosswing import runpid
+    from flosswing.state.models import SessionHeartbeat
+    from flosswing.tui.screens.sessions import SessionsScreen
+
+    _add_running_run("01JTESTRUN0000000000000099")
+    with st_session.session_scope() as s:
+        s.add(
+            SessionHeartbeat(
+                run_id="01JTESTRUN0000000000000099",
+                stage="hunt",
+                model="claude-opus-4-8",
+                input_tokens=321,
+                output_tokens=99,
+                cost_usd=0.07,
+                started_at=_iso(),
+                updated_at=_iso(),
+            )
+        )
+    monkeypatch.setattr(runpid, "liveness", lambda rid: "live")
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen(SessionsScreen("01JTESTRUN0000000000000099"))
+        await pilot.pause()
+        from rich.style import Style
+        from textual.widgets import DataTable
+
+        table = app.screen.query_one("#sessions-table", DataTable)
+        assert table.row_count == 1  # only the live row (no committed sessions)
+        # Outcome column (index 5) shows the synthetic live marker.
+        lines = table._render_cell(0, 5, Style(), width=12)
+        rendered = "".join(seg.text for line in lines for seg in line)
+        assert "live" in rendered
+
+
+@pytest.mark.asyncio
+async def test_sessions_screen_survives_transient_read_error(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient DB read error must not permanently stop the poll timer —
+    the tick is skipped and polling continues."""
+    from flosswing.tui import data
+    from flosswing.tui.screens.sessions import SessionsScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = SessionsScreen(seeded_db)
+        app.push_screen(screen)
+        await pilot.pause()
+
+        def boom(_run_id: str) -> object:
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(data, "activity", boom)
+        screen.refresh_rows()  # must not raise, must not stop the poll
+        assert screen._poll is not None  # timer still armed for the next tick
 
 
 @pytest.mark.asyncio
@@ -827,12 +908,13 @@ async def test_runs_screen_stale_run_has_empty_elapsed(
         from textual.widgets import DataTable
 
         table = app.screen.query_one("#runs-table", DataTable)
-        # Find the stale run's row and render its Elapsed column (index 7).
+        # Find the stale run's row and render its Elapsed column (index 8;
+        # the Cost column added at index 7 shifted it right).
         rendered = ""
         for row in range(table.row_count):
             key = table.coordinate_to_cell_key((row, 0)).row_key.value
             if key == "01JTESTRUN0000000000000013":
-                lines = table._render_cell(row, 7, Style(), width=10)
+                lines = table._render_cell(row, 8, Style(), width=10)
                 rendered = "".join(seg.text for line in lines for seg in line)
         assert rendered.strip() == ""
 
@@ -858,6 +940,6 @@ async def test_runs_screen_live_run_shows_elapsed(
         for row in range(table.row_count):
             key = table.coordinate_to_cell_key((row, 0)).row_key.value
             if key == "01JTESTRUN0000000000000014":
-                lines = table._render_cell(row, 7, Style(), width=10)
+                lines = table._render_cell(row, 8, Style(), width=10)
                 rendered = "".join(seg.text for line in lines for seg in line)
         assert rendered.strip() != ""  # live run shows an elapsed value

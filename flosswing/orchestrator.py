@@ -42,6 +42,7 @@ from flosswing.stages import validate as validate_stage
 from flosswing.stages.dedupe import DedupeStageResult
 from flosswing.stages.report import ReportRenderResult
 from flosswing.stages.trace import TraceStageResult
+from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import Finding, HuntTask, Run, Validation
 
@@ -632,3 +633,9 @@ async def run_scan(cfg: Config) -> ScanResult:
     finally:
         if finished_cleanly:
             runpid.clear_pid_file(run_id)
+        # Sweep any in-flight heartbeat row left by a Python-level crash
+        # mid-session (a clean finish already cleared it in the stage's
+        # finalize transaction). Best-effort; never raises. A row left by a
+        # hard SIGKILL is harmless — the TUI ignores heartbeats for runs that
+        # aren't PID-file-live.
+        st_heartbeat.clear_run(run_id)

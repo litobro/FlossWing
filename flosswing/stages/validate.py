@@ -43,12 +43,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
+from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
 from flosswing.config import Config
 from flosswing.errors import FlosswingError, ToolValidationError
 from flosswing.prompts import load_attack_class_fragment
 from flosswing.sandbox.base import CompileAndRunInput
 from flosswing.secrets_triage import classify_secret
+from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, Validation
 from flosswing.tools import execution as t_execution
@@ -107,21 +109,6 @@ class ValidateStageResult:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _estimate_cost_usd(
-    *, model: str, input_tokens: int, output_tokens: int
-) -> float:
-    rates = {
-        "claude-opus-4-7": (15.0, 75.0),
-        "claude-opus-4-8": (15.0, 75.0),
-        "claude-sonnet-4-6": (3.0, 15.0),
-        "claude-haiku-4-5": (0.80, 4.00),
-    }
-    in_rate, out_rate = rates.get(model, (15.0, 75.0))
-    return (input_tokens / 1_000_000) * in_rate + (
-        output_tokens / 1_000_000
-    ) * out_rate
 
 
 # -----------------------------------------------------------------------------
@@ -544,6 +531,17 @@ async def run(
                     finished_at=started_at,
                 )
             )
+            # Seed the live heartbeat in the same transaction so the TUI hides
+            # this placeholder (and shows a live line) from the moment the
+            # session starts, not only after the first on_usage emit.
+            st_heartbeat.seed(
+                s,
+                run_id=run_id,
+                stage="validate",
+                model=cfg.model,
+                agent_session_id=agent_session_id,
+                finding_id=finding_id,
+            )
 
         tools = _build_validate_tools(
             repo_root=repo,
@@ -568,17 +566,28 @@ async def run(
             # lets test stubs read the same pre-allocated id the real
             # validate_finding tool wrapper closes over.
             agent_session_id=agent_session_id,
+            on_usage=st_heartbeat.make_on_usage(
+                run_id=run_id,
+                stage="validate",
+                model=cfg.model,
+                finding_id=finding_id,
+                agent_session_id=agent_session_id,
+            ),
         )
         finished_at = _now_iso()
-        cost = _estimate_cost_usd(
+        cost = pricing.resolve_cost_usd(
             model=cfg.model,
             input_tokens=session_result.input_tokens,
             output_tokens=session_result.output_tokens,
+            cache_read_tokens=session_result.cache_read_tokens,
+            cache_write_tokens=session_result.cache_write_tokens,
+            authoritative=session_result.cost_usd,
         )
         input_tokens_total += session_result.input_tokens
         output_tokens_total += session_result.output_tokens
 
-        # UPDATE the audit row with the real outcome / usage / timestamps.
+        # UPDATE the audit row with the real outcome / usage / timestamps, and
+        # clear the live heartbeat in the same transaction (atomic swap).
         with st_session.session_scope() as s:
             sess = s.get(AgentSession, agent_session_id)
             if sess is not None:
@@ -593,6 +602,7 @@ async def run(
                 sess.error_text = session_result.error_text
                 sess.tool_calls_count = session_result.tool_calls_count
                 sess.finished_at = finished_at
+            st_heartbeat.clear(s, run_id)
 
         # Classify finding outcome. If the agent called validate_finding,
         # a validations row exists and the finding's status is one of

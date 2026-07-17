@@ -24,6 +24,7 @@ config import auth metadata FROM the provider without a circular import.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import time
@@ -38,8 +39,20 @@ from claude_agent_sdk import (
     query,
 )
 
-from flosswing.agent.providers.base import SessionResult, _classify
+from flosswing.agent.providers.base import (
+    OnUsage,
+    SessionResult,
+    UsageSnapshot,
+    _classify,
+)
 from flosswing.errors import AuthCredentialMissingError
+
+logger = logging.getLogger(__name__)
+
+# Minimum wall-clock gap between in-flight usage emits. The SDK can stream many
+# assistant turns quickly; throttling keeps the callback (a DB upsert) from
+# hammering SQLite. The terminal ResultMessage always force-flushes past this.
+_MIN_EMIT_INTERVAL_S = 0.25
 
 # --- Auth key sets (moved verbatim from config.py) -------------------------
 
@@ -267,12 +280,20 @@ class AnthropicSDKProvider:
         task_id: str | None = None,
         finding_id: str | None = None,
         agent_session_id: str | None = None,
+        on_usage: OnUsage | None = None,
     ) -> SessionResult:
         """Drive one claude-agent-sdk session and return a structured result.
 
         `tools` is the list returned by `tool_registry.build_recon_tools(...)`.
         We wrap it into an in-process SDK MCP server and pass it to
         ClaudeAgentOptions.mcp_servers under a single namespace.
+
+        `on_usage`, when supplied, is invoked once per assistant turn with a
+        cumulative `UsageSnapshot` (throttled to `_MIN_EMIT_INTERVAL_S`; the
+        terminal ResultMessage force-flushes). It lets a caller surface live
+        in-flight token/cost while the session runs. The provider stays
+        DB-agnostic: it only calls this opaque callback and never touches the
+        state DB itself.
 
         `run_id`, `stage`, `task_id`, `finding_id`, `agent_session_id` are
         accepted for parity with the stage-side caller (so callers can pass
@@ -316,6 +337,36 @@ class AnthropicSDKProvider:
         refusal_text: str | None = None
         tool_calls = 0
         api_error: str | None = None
+        cost_usd: float | None = None
+        last_emit = 0.0
+
+        def _emit() -> None:
+            """Push a per-turn UsageSnapshot to on_usage (throttled).
+
+            Never propagates: a telemetry write must not abort a live session.
+            Cost is left None (interim): the caller estimates from tokens until
+            the authoritative figure lands in the finalized agent_sessions row.
+            """
+            nonlocal last_emit
+            if on_usage is None:
+                return
+            now = time.monotonic()
+            if (now - last_emit) < _MIN_EMIT_INTERVAL_S:
+                return
+            last_emit = now
+            try:
+                on_usage(
+                    UsageSnapshot(
+                        input_tokens=usage.get("input_tokens", 0),
+                        output_tokens=usage.get("output_tokens", 0),
+                        cache_read_tokens=usage.get("cache_read_tokens", 0),
+                        cache_write_tokens=usage.get("cache_write_tokens", 0),
+                        tool_calls_count=tool_calls,
+                        cost_usd=None,
+                    )
+                )
+            except Exception:
+                logger.exception("on_usage callback failed; continuing session")
 
         try:
             async for message in query(prompt=user_prompt, options=options):
@@ -329,6 +380,8 @@ class AnthropicSDKProvider:
                     u = _harvest_usage(message.usage)
                     if u:
                         usage = u
+                        # Live tick for the in-flight ticker (throttled).
+                        _emit()
                     if message.stop_reason:
                         stop_reason = message.stop_reason
                     # AssistantMessage.error is a Literal of error categories.
@@ -340,6 +393,10 @@ class AnthropicSDKProvider:
                     u = _harvest_usage(message.usage)
                     if u:
                         usage = u
+                    # Authoritative end-of-session cost; may be None if the SDK
+                    # didn't report it (older CLI, error paths).
+                    if message.total_cost_usd is not None:
+                        cost_usd = message.total_cost_usd
                     result_err = _api_error_from_result(
                         is_error=message.is_error,
                         subtype=message.subtype,
@@ -356,6 +413,11 @@ class AnthropicSDKProvider:
                     # indicates a refusal; capture it for the classifier.
                     if message.stop_reason == "refusal" and message.result:
                         refusal_text = message.result
+                    # No terminal emit here: the caller finalizes and deletes
+                    # the heartbeat within microseconds of this branch, so a
+                    # final upsert would only ever be written and immediately
+                    # deleted, never observed by the ~1s TUI poll. The live
+                    # ticker is driven by the per-turn AssistantMessage emits.
                 # Best-effort budget check: abort the iterator if we've
                 # already overshot.
                 if usage.get("input_tokens", 0) > token_budget:
@@ -379,6 +441,7 @@ class AnthropicSDKProvider:
             refusal_text=refusal_text,
             budget=token_budget,
             api_error=api_error,
+            cost_usd=cost_usd,
         )
         return SessionResult(
             outcome=classified.outcome,
@@ -390,4 +453,5 @@ class AnthropicSDKProvider:
             tool_calls_count=tool_calls,
             refusal_text=classified.refusal_text,
             error_text=classified.error_text,
+            cost_usd=classified.cost_usd,
         )

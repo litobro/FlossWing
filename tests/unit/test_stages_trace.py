@@ -475,6 +475,8 @@ async def test_trace_sequential_per_finding(
     # Each entry is (start_ns, end_ns). Sequential -> entry N's end_ns
     # is <= entry N+1's start_ns.
     windows: list[tuple[int, int]] = []
+    from flosswing.agent.providers.base import UsageSnapshot
+    from flosswing.state.models import SessionHeartbeat
 
     async def fake_run_session(**kw: object) -> SessionResult:
         started = time.monotonic_ns()
@@ -483,6 +485,18 @@ async def test_trace_sequential_per_finding(
         await asyncio.sleep(0.01)
         ended = time.monotonic_ns()
         windows.append((started, ended))
+        on_usage = kw.get("on_usage")
+        assert callable(on_usage)
+        on_usage(
+            UsageSnapshot(
+                input_tokens=100,
+                output_tokens=50,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                tool_calls_count=1,
+                cost_usd=None,
+            )
+        )
         return _benign_session_result()
 
     monkeypatch.setattr(
@@ -501,6 +515,9 @@ async def test_trace_sequential_per_finding(
     # Strict ordering: previous session must have finished before the
     # next started. Equality is acceptable on the boundary.
     assert windows[0][1] <= windows[1][0]
+    # Both per-finding finalizes cleared the heartbeat.
+    with st_session.session_scope() as s:
+        assert s.execute(select(SessionHeartbeat)).scalars().all() == []
 
 
 @pytest.mark.asyncio
@@ -1247,3 +1264,47 @@ def test_trace_gated_on_confirmed_primary_count(
     seed_confirmed_primary["enabled"] = True
     asyncio.run(orchestrator.run_scan(_orch_cfg(tmp_path)))
     assert trace_called == [True]
+
+
+@pytest.mark.asyncio
+async def test_trace_session_crash_clears_heartbeat(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A per-finding session that raises mid-flight must still clear the live
+    heartbeat (exercises trace.py's crash-recovery except path)."""
+    from flosswing.agent.providers.base import UsageSnapshot
+    from flosswing.state.models import SessionHeartbeat
+
+    run_id = str(ULID())
+    _seed_run(run_id)
+    task_id = _seed_task(run_id)
+    _seed_finding(run_id=run_id, task_id=task_id)
+
+    async def fake_run_session(**kw: object) -> SessionResult:
+        on_usage = kw["on_usage"]
+        assert callable(on_usage)
+        on_usage(
+            UsageSnapshot(
+                input_tokens=100,
+                output_tokens=50,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                tool_calls_count=1,
+                cost_usd=None,
+            )
+        )
+        raise RuntimeError("session blew up mid-flight")
+
+    monkeypatch.setattr(
+        trace_stage, "run_session", AsyncMock(side_effect=fake_run_session)
+    )
+
+    result = await trace_stage.run(
+        run_id=run_id,
+        repo=isolated_db,
+        cfg=_minimal_cfg(isolated_db),
+        session_factory=st_session.session_factory(),
+    )
+    assert result.findings_errored == 1
+    with st_session.session_scope() as s:
+        assert s.execute(select(SessionHeartbeat)).scalars().all() == []

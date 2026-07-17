@@ -87,10 +87,10 @@ class RunsScreen(Screen[None]):
         table = self.query_one("#runs-table", DataTable)
         table.add_columns(
             "Run", "Repo", "Status", "Live", "Stage", "Findings", "Tokens",
-            "Elapsed", "Started",
+            "Cost", "Elapsed", "Started",
         )
         self.refresh_rows()
-        self._poll = self.set_interval(2.0, self.refresh_rows)
+        self._poll = self.set_interval(data.POLL_INTERVAL_SECONDS, self.refresh_rows)
 
     def refresh_rows(self) -> None:
         table = self.query_one("#runs-table", DataTable)
@@ -127,6 +127,7 @@ class RunsScreen(Screen[None]):
                 r.active_stage or "",
                 str(r.findings_count),
                 f"{r.tokens_used:,}",
+                f"${r.cost_usd:.2f}",
                 elapsed,
                 r.started_at,
                 key=r.id,

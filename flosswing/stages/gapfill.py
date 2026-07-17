@@ -42,9 +42,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
+from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
 from flosswing.config import Config
 from flosswing.errors import FlosswingError, ToolValidationError
+from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, HuntTask
 from flosswing.tools import findings as t_findings
@@ -91,21 +93,6 @@ class GapfillStageResult:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _estimate_cost_usd(
-    *, model: str, input_tokens: int, output_tokens: int
-) -> float:
-    rates = {
-        "claude-opus-4-7": (15.0, 75.0),
-        "claude-opus-4-8": (15.0, 75.0),
-        "claude-sonnet-4-6": (3.0, 15.0),
-        "claude-haiku-4-5": (0.80, 4.00),
-    }
-    in_rate, out_rate = rates.get(model, (15.0, 75.0))
-    return (input_tokens / 1_000_000) * in_rate + (
-        output_tokens / 1_000_000
-    ) * out_rate
 
 
 # -----------------------------------------------------------------------------
@@ -419,15 +406,22 @@ async def run(
         run_id=run_id,
         stage="gapfill",
         agent_session_id=agent_session_id,
+        on_usage=st_heartbeat.make_on_usage(
+            run_id=run_id, stage="gapfill", model=cfg.model
+        ),
     )
     finished_at = _now_iso()
-    cost = _estimate_cost_usd(
+    cost = pricing.resolve_cost_usd(
         model=cfg.model,
         input_tokens=session_result.input_tokens,
         output_tokens=session_result.output_tokens,
+        cache_read_tokens=session_result.cache_read_tokens,
+        cache_write_tokens=session_result.cache_write_tokens,
+        authoritative=session_result.cost_usd,
     )
 
     # INSERT the audit row after the session — matches v0.3 Hunt's pattern.
+    # Clear the live heartbeat in the same transaction (atomic swap).
     with st_session.session_scope() as s:
         s.add(
             AgentSession(
@@ -452,6 +446,7 @@ async def run(
                 finished_at=finished_at,
             )
         )
+        st_heartbeat.clear(s, run_id)
 
     # Count new source='gapfill' rows for the result. Read the DB
     # post-session — this is the authoritative count, independent of

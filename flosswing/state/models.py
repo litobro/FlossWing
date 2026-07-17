@@ -113,6 +113,36 @@ class AgentSession(Base):
     finished_at: Mapped[str] = mapped_column(Text)
 
 
+class SessionHeartbeat(Base):
+    """Ephemeral in-flight-session ticker (one row per run_id).
+
+    Written while an agent session streams, deleted in the same transaction as
+    the terminal agent_sessions write. Backs the TUI's live token/cost counter.
+    CHECK constraints (ck_session_heartbeats_stage/_tokens/_cost/_tool_calls)
+    are enforced server-side and not duplicated in Python. See
+    docs/specs/2026-07-16-tui-live-token-cost-design.md.
+    """
+
+    __tablename__ = "session_heartbeats"
+
+    run_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    stage: Mapped[str] = mapped_column(Text)
+    task_id: Mapped[str | None] = mapped_column(Text, default=None)
+    finding_id: Mapped[str | None] = mapped_column(Text, default=None)
+    agent_session_id: Mapped[str | None] = mapped_column(Text, default=None)
+    model: Mapped[str] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(REAL, default=0.0)
+    tool_calls_count: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[str] = mapped_column(Text)
+
+
 class Finding(Base):
     __tablename__ = "findings"
 

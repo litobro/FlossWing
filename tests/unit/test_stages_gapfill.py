@@ -85,14 +85,29 @@ async def test_gapfill_stage_computes_cap_floor_one(
     """Per design decision #1: cap = max(1, recon_task_count // 5).
     1 Recon task -> cap=1 (the floor wins)."""
     run_id = _seed_run_with_recon_tasks(1)
+    from flosswing.agent.providers.base import UsageSnapshot
+    from flosswing.state.models import SessionHeartbeat
 
     async def fake_run_session(**kw: object) -> SessionResult:
+        on_usage = kw.get("on_usage")
+        assert callable(on_usage)
+        on_usage(
+            UsageSnapshot(
+                input_tokens=100,
+                output_tokens=50,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                tool_calls_count=1,
+                cost_usd=None,
+            )
+        )
         return SessionResult(
             outcome="completed",
             input_tokens=100, output_tokens=50,
             cache_read_tokens=0, cache_write_tokens=0,
             duration_ms=1_000, tool_calls_count=1,
             refusal_text=None, error_text=None,
+            cost_usd=4.20,  # authoritative
         )
 
     monkeypatch.setattr(
@@ -106,6 +121,10 @@ async def test_gapfill_stage_computes_cap_floor_one(
     )
     assert result.cap == 1
     assert result.outcome == "completed"
+    with st_session.session_scope() as s:
+        row = s.execute(select(AgentSession)).scalars().one()
+        assert row.cost_usd == 4.20  # authoritative cost preferred
+        assert s.execute(select(SessionHeartbeat)).scalars().all() == []  # cleared
 
 
 @pytest.mark.asyncio

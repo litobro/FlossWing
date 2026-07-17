@@ -60,16 +60,19 @@ class RunDetailScreen(Screen[None]):
     def on_mount(self) -> None:
         table = self.query_one("#hunt-table", DataTable)
         table.add_columns("Attack class", "Scope", "Status", "Findings")
-        self._poll = self.set_interval(2.0, self.refresh_view)
+        self._poll = self.set_interval(data.POLL_INTERVAL_SECONDS, self.refresh_view)
         self.refresh_view()
 
     def refresh_view(self) -> None:
-        p = data.run_progress(self._run_id)
+        # One query pass per poll: progress + live line + session list from a
+        # single transaction / PID read, instead of three separate reads.
+        view = data.run_detail_view(self._run_id)
+        p = view.progress if view is not None else None
         banner = self.query_one("#liveness-banner", Static)
         strip = self.query_one("#stage-strip", Static)
         meta = self.query_one("#run-meta", Static)
         activity = self.query_one("#recent-activity", Static)
-        if p is None:
+        if view is None or p is None:
             banner.update("")
             strip.update("run not found")
             meta.update("")
@@ -80,13 +83,21 @@ class RunDetailScreen(Screen[None]):
         strip.update(
             "  ".join(f"{_GLYPH.get(st.state, '?')} {st.name}" for st in p.stages)
         )
-        meta.update(
+        meta_text = (
             f"Hunt {p.hunt_done}/{p.hunt_total}   "
             f"findings {p.findings_total}   "
             f"tokens {p.tokens_used:,}   "
             f"cost ${p.cost_usd:.2f}"
         )
-        activity.update(self._activity_text())
+        # Live rates appear only while the run is running and PID-file-live.
+        if p.tokens_per_sec is not None:
+            meta_text += f"   {p.tokens_per_sec:,.0f} tok/s"
+        if p.cost_per_min is not None:
+            meta_text += f"   ${p.cost_per_min:.3f}/min"
+        if p.projected_cost_usd is not None:
+            meta_text += f"   proj ~${p.projected_cost_usd:.2f}"
+        meta.update(meta_text)
+        activity.update(self._activity_text(view.live, view.recent_sessions))
         table = self.query_one("#hunt-table", DataTable)
         cursor = table.cursor_row
         table.clear()
@@ -133,17 +144,30 @@ class RunDetailScreen(Screen[None]):
             style="yellow",
         )
 
-    def _activity_text(self) -> Text:
+    def _activity_text(
+        self,
+        live: data.LiveSessionRow | None,
+        sessions: list[data.SessionRow],
+    ) -> Text:
         """Tail of the agent-session feed — the DB-derived 'what happened' view.
 
-        Sessions land as each stage/task finishes, so this grows live. Rendered
-        as literal Text: refusal/error snippets are credential-scrubbed upstream
-        but may still contain markup-like characters.
+        Sessions land as each stage/task finishes, so this grows live. The live
+        line and session list come from the same transaction (see
+        run_detail_view) so they never contradict. Rendered as literal Text:
+        refusal/error snippets are credential-scrubbed upstream but may still
+        contain markup-like characters.
         """
-        sessions = data.list_sessions(self._run_id)
-        if not sessions:
+        if live is None and not sessions:
             return Text("no agent activity yet")
         lines: list[str] = []
+        # The in-flight session leads the feed with a live, ticking line; its
+        # cost is interim (estimated) until the session finalizes.
+        if live is not None:
+            lines.append(
+                f"▶ LIVE  {live.stage}  "
+                f"{live.input_tokens:,}/{live.output_tokens:,} tok  "
+                f"~${live.cost_usd:.2f}"
+            )
         for sr in sessions[-5:]:
             line = (
                 f"{sr.stage}  {sr.outcome}  "

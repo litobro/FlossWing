@@ -174,8 +174,24 @@ async def test_hunt_records_one_agent_session_per_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_id, _task_ids, repo = fresh_db_with_tasks
+    from flosswing.agent.providers.base import UsageSnapshot
+    from flosswing.state.models import SessionHeartbeat
 
     async def fake_run_session(**kwargs: object) -> SessionResult:
+        # The stage must pass a usable on_usage callback; invoke it to write
+        # the in-flight heartbeat, which finalize must then clear.
+        on_usage = kwargs.get("on_usage")
+        assert callable(on_usage)
+        on_usage(
+            UsageSnapshot(
+                input_tokens=1234,
+                output_tokens=56,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                tool_calls_count=2,
+                cost_usd=None,
+            )
+        )
         return SessionResult(
             outcome="completed",
             input_tokens=1234,
@@ -207,6 +223,8 @@ async def test_hunt_records_one_agent_session_per_task(
             assert sess.task_id is not None
             assert sess.outcome == "completed"
             assert sess.input_tokens == 1234
+        # Every task's finalize cleared the heartbeat — none linger.
+        assert s.execute(select(SessionHeartbeat)).scalars().all() == []
 
 
 @pytest.mark.asyncio
