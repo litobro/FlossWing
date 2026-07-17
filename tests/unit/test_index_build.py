@@ -347,3 +347,28 @@ async def test_build_index_resolves_call_edge_for_non_python_language(
         )
         assert len(edges) >= 1, "Go main -> greet call edge not resolved"
         assert any(e.caller_symbol_id == main.id for e in edges)
+
+
+@pytest.mark.asyncio
+async def test_build_index_surfaces_uninitialized_submodules(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flosswing.index import walker as walker_mod
+
+    run_id, artifact_id = _make_run_and_artifact()
+    repo = _make_python_repo(isolated_db)
+    scratch = isolated_db / "runs" / run_id / "index"
+    scratch.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        walker_mod,
+        "find_uninitialized_submodules",
+        lambda _repo: ["vendor/foo"],
+    )
+
+    result = await build_index(
+        run_id=run_id, recon_artifact_id=artifact_id, repo=repo,
+        languages={"python"}, session_factory=st_session.session_factory(),
+        scratch_dir=scratch,
+    )
+    assert result.submodules_skipped == ["vendor/foo"]
