@@ -30,6 +30,7 @@ responsibilities stages/validate.py.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,7 +46,9 @@ from ulid import ULID
 from flosswing.agent.runtime import run_session
 from flosswing.config import Config
 from flosswing.errors import FlosswingError, ToolValidationError
+from flosswing.prompts import load_attack_class_fragment
 from flosswing.sandbox.base import CompileAndRunInput
+from flosswing.secrets_triage import classify_secret
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, Validation
 from flosswing.tools import execution as t_execution
@@ -53,6 +56,8 @@ from flosswing.tools import findings as t_findings
 from flosswing.tools import fs as t_fs
 from flosswing.tools import search as t_search
 from flosswing.tools import symbols as t_symbols
+
+logger = logging.getLogger(__name__)
 
 _PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "prompts"
 _VALIDATE_SYSTEM_PROMPT_PATH = _PROMPTS_ROOT / "system" / "validate.md"
@@ -361,6 +366,7 @@ def _compose_user_prompt(finding: Finding) -> str:
     query_findings available if it wants the full row; this is a
     convenience header.
     """
+    fragment = load_attack_class_fragment(finding.attack_class)
     return (
         f"Finding under review:\n"
         f"  finding_id:   {finding.id}\n"
@@ -377,7 +383,63 @@ def _compose_user_prompt(finding: Finding) -> str:
         "\n"
         f"PoC code (if any):\n"
         f"{finding.poc_code or '<none>'}\n"
+        "\n"
+        "---\n"
+        "Attack-class guidance:\n"
+        f"{fragment}\n"
     )
+
+
+def _read_source_span(repo: Path, file: str, line_start: int, line_end: int) -> str:
+    # `file` is untrusted (target-repo-influenced): an absolute path would make
+    # `repo / file` discard `repo`, and `..`/symlinks could escape it. Resolve
+    # and require the result to stay under repo; fail closed to an empty span.
+    try:
+        repo_root = repo.resolve()
+        target = (repo_root / file).resolve()
+        if not target.is_relative_to(repo_root):
+            return ""
+        lines = target.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, ValueError):
+        return ""
+    lo = max(line_start - 1, 0)
+    hi = min(line_end, len(lines))
+    return "\n".join(lines[lo:hi])
+
+
+def _maybe_downgrade_secret(finding_id: str, repo: Path) -> None:
+    """Downgrade a confirmed hardcoded_secrets dev/placeholder to info.
+
+    Post-verdict gate: never drops, never changes status, never touches
+    other attack classes. Fails open — any error leaves the verdict as-is.
+    """
+    with st_session.session_scope() as s:
+        finding = s.get(Finding, finding_id)
+        if (
+            finding is None
+            or finding.attack_class != "hardcoded_secrets"
+            or finding.status != "confirmed"
+            or finding.severity == "info"
+        ):
+            return
+        try:
+            span = _read_source_span(
+                repo, finding.file, finding.line_start, finding.line_end
+            )
+            evidence = f"{span}\n{finding.poc_code or ''}"
+            triage = classify_secret(finding.file, evidence)
+        except Exception:  # gate must fail open, never crash stage (BLE001 unselected)
+            logger.exception("secrets_triage failed for finding %s", finding_id)
+            return
+        if not triage.downgradeable:
+            return
+        finding.severity = "info"
+        finding.root_cause_summary = (finding.root_cause_summary or "") + (
+            f"\n[secrets_triage: {triage.classification} — {triage.reason}; "
+            "dev/placeholder value, not a shipped production secret]"
+        )
 
 
 async def run(
@@ -552,6 +614,7 @@ async def run(
                 findings_no_verdict += 1
             elif verdict == "confirmed":
                 findings_confirmed += 1
+                _maybe_downgrade_secret(finding_id, repo)
             elif verdict == "rejected":
                 findings_rejected += 1
             elif verdict == "uncertain":

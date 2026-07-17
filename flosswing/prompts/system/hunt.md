@@ -76,6 +76,10 @@ You are allowed (and encouraged) to include a short, textual
 demonstrate the bug, or a snippet showing how to drive the
 vulnerable path. Keep it small (a few lines).
 
+When you include `poc_code`, prefer a PoC that **imports and drives the
+real target module** over a standalone reconstruction. A PoC that
+re-implements the sink cannot be validated and will be discounted.
+
 **Do not invent `poc_result`** output. Leave that field unset.
 The Report stage surfaces findings with `poc_code` but no
 `poc_result` so the operator can review them manually.

@@ -94,6 +94,20 @@ returns `id` output, an SSRF that hits a sentinel server, a SQL
 injection that produces a particular error class) is the
 strongest possible evidence for `confirmed`.
 
+**A PoC that mocks the sink proves nothing.** Confirmation via
+`compile_and_run` counts only when the PoC exercises the **real target
+code** — it imports the repo module under review and drives the actual
+function or class. A PoC that re-implements, mocks, or hand-rolls the
+sink or a helper — defines its own copy of the vulnerable function,
+hardcodes the "vulnerable" output, or reconstructs a sanitizer from
+memory — is **non-probative**: its exit code describes the PoC's own
+code, not the repo's. When the real module cannot be imported or run in
+the sandbox (heavy dependencies, no install step), do **not** accept a
+self-mocking PoC as evidence — use the reachability-argument path, or
+return `uncertain`. This applies with special force to classes that
+cannot be *executed* at all (e.g. `hardcoded_secrets`), where a PoC that
+merely re-prints the literal confirms nothing.
+
 **Walk the symbol index.** Use `find_callers` on the vulnerable
 function to see who calls it. Use `find_definition` to inspect the
 sinks. If the vulnerable code is unreachable from any Recon-identified

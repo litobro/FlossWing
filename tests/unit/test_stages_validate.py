@@ -537,3 +537,154 @@ async def test_validate_tool_builder_registers_all_eight_tools(
     # per spec § "Defence-in-depth: record_finding is not in Validate's
     # scope").
     assert "record_finding" not in tool_names
+
+
+def test_validate_prompt_includes_hardcoded_secrets_disqualifiers() -> None:
+    from flosswing.stages.validate import _compose_user_prompt
+    from flosswing.state.models import Finding
+
+    f = Finding(
+        id="01F", run_id="01R", hunt_task_id="01H",
+        attack_class="hardcoded_secrets", file="docker-compose.yml",
+        line_start=1, line_end=1, severity="high", confidence="likely",
+        status="pending_validation", title="t",
+        description="d" * 60, created_at="2026-07-16T00:00:00Z",
+    )
+    prompt = _compose_user_prompt(f)
+    assert "Disqualifiers" in prompt or "placeholder" in prompt.lower()
+
+
+def test_gate_downgrades_dev_default_secret(isolated_db: Path) -> None:
+    """Per spec § Part C: a confirmed hardcoded_secrets finding whose value
+    is an obvious dev default (docker-compose.yml, sentinel value) gets its
+    severity downgraded to info. Status never changes.
+
+    Reuses _seed_run_with_findings to satisfy the Run/HuntTask FKs, then
+    flips the seeded finding's fields to the shape under test (see task
+    brief note: insert a matching Run row first / reuse the helper)."""
+    from flosswing.stages.validate import _maybe_downgrade_secret
+    from flosswing.state.models import Finding
+
+    (isolated_db / "docker-compose.yml").write_text(
+        "services:\n  es:\n    environment:\n      ELASTIC_PASSWORD: devpass\n",
+        encoding="utf-8",
+    )
+    _run_id, finding_ids = _seed_run_with_findings(
+        severities=["high"], statuses=["confirmed"]
+    )
+    finding_id = finding_ids[0]
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        f.attack_class = "hardcoded_secrets"
+        f.file = "docker-compose.yml"
+        f.line_start = 4
+        f.line_end = 4
+
+    _maybe_downgrade_secret(finding_id, isolated_db)
+
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        assert f.severity == "info"
+        assert f.status == "confirmed"  # never changes status
+        assert "secrets_triage" in (f.root_cause_summary or "")
+
+
+def test_gate_does_not_raise_on_nul_byte_in_path(isolated_db: Path) -> None:
+    """Per final-fix-brief Fix 2: `_read_source_span` and the `evidence`
+    construction must run INSIDE the fail-open try/except, so a
+    non-OSError (e.g. ValueError: embedded null byte, raised when the
+    Hunt-agent-influenced `finding.file` contains a NUL) does not escape
+    and crash the Validate stage. Severity is left unchanged."""
+    from flosswing.stages.validate import _maybe_downgrade_secret
+    from flosswing.state.models import Finding
+
+    _run_id, finding_ids = _seed_run_with_findings(
+        severities=["high"], statuses=["confirmed"]
+    )
+    finding_id = finding_ids[0]
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        f.attack_class = "hardcoded_secrets"
+        f.file = "a\x00b.py"
+        f.line_start = 1
+        f.line_end = 1
+
+    # Must not raise.
+    _maybe_downgrade_secret(finding_id, isolated_db)
+
+    with st_session.session_scope() as s:
+        f = s.get(Finding, finding_id)
+        assert f is not None
+        assert f.severity == "high"  # unchanged
+        assert f.status == "confirmed"  # unchanged
+
+
+def test_read_source_span_refuses_paths_outside_repo(tmp_path: Path) -> None:
+    """`finding.file` is untrusted; reads must stay under `repo` and fail
+    closed to an empty span for absolute paths, `..` traversal, and
+    symlinks that escape the repo."""
+    from flosswing.stages.validate import _read_source_span
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "in_repo.py").write_text("secret = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("TOP SECRET\n", encoding="utf-8")
+
+    # In-repo read works.
+    assert _read_source_span(repo, "in_repo.py", 1, 1) == "secret = 1"
+    # Absolute path escapes repo -> empty.
+    assert _read_source_span(repo, str(outside), 1, 1) == ""
+    # `..` traversal escapes repo -> empty.
+    assert _read_source_span(repo, "../outside.txt", 1, 1) == ""
+    # Symlink pointing outside the repo -> empty.
+    link = repo / "link.txt"
+    link.symlink_to(outside)
+    assert _read_source_span(repo, "link.txt", 1, 1) == ""
+
+
+def test_gate_leaves_real_secret_and_other_classes(isolated_db: Path) -> None:
+    """A confirmed hardcoded_secrets finding on a real high-entropy secret in
+    a prod .py file, and a confirmed sqli finding, are both left untouched by
+    the gate."""
+    from flosswing.stages.validate import _maybe_downgrade_secret
+    from flosswing.state.models import Finding
+
+    (isolated_db / "prod.py").write_text(
+        'API_KEY = "a9F3k1Lz8Qw2Rt7Yb4Xc6Vn0Ms5Pd3Hj1Gf9Kd2"\n', encoding="utf-8"
+    )
+    (isolated_db / "docker-compose.yml").write_text(
+        "services:\n  db:\n    image: postgres\n", encoding="utf-8"
+    )
+    _run_id, finding_ids = _seed_run_with_findings(
+        severities=["high", "high"], statuses=["confirmed", "confirmed"]
+    )
+    real_id, sqli_id = finding_ids
+    with st_session.session_scope() as s:
+        real = s.get(Finding, real_id)
+        assert real is not None
+        real.attack_class = "hardcoded_secrets"
+        real.file = "prod.py"
+        real.line_start = 1
+        real.line_end = 1
+
+        sqli = s.get(Finding, sqli_id)
+        assert sqli is not None
+        sqli.attack_class = "sqli"
+        sqli.file = "docker-compose.yml"
+        sqli.line_start = 1
+        sqli.line_end = 1
+
+    _maybe_downgrade_secret(real_id, isolated_db)
+    _maybe_downgrade_secret(sqli_id, isolated_db)
+
+    with st_session.session_scope() as s:
+        f_real = s.get(Finding, real_id)
+        f_sqli = s.get(Finding, sqli_id)
+        assert f_real is not None
+        assert f_sqli is not None
+        assert f_real.severity == "high"
+        assert f_sqli.severity == "high"

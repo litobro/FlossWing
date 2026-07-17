@@ -4,6 +4,19 @@ Local-CLI vulnerability research harness. Multi-stage agent pipeline
 (Recon → Hunt → Validate → Gapfill → Dedupe → Trace → Report) targeting cloned
 OSS repos. Run as `flosswing scan <path>`.
 
+## Commands
+
+```bash
+pytest tests/unit                     # unit suite (CI gate); mocks SDK at query()/tool()
+FLOSSWING_INTEGRATION=1 pytest tests/integration   # real API, gated, not in CI
+ruff check .                          # lint (CI runs whole-repo)
+mypy --strict flosswing               # types (migrations/ excluded via pyproject)
+# Migration reversibility (CI verifies this after any schema change):
+alembic -c alembic.ini upgrade head && alembic -c alembic.ini downgrade base && alembic -c alembic.ini upgrade head
+flosswing scan <path>                 # full pipeline over a cloned repo
+flosswing eval --corpus v02_smoke --corpus-root tests/corpus   # score vs known-CVE ground truth (real API)
+```
+
 ## Read these before changing anything
 
 These are the source of truth. If something here disagrees with one of them,
@@ -84,6 +97,10 @@ Top-level orientation:
 - **Match the v1/v2 scope exactly.** Cross-repo trace, auto-disclosure, Feedback stage, plugin systems, additional languages — all v2, don't touch. (The model-provider abstraction was promoted to v1 per operator decision 2026-06-17; Anthropic is the only working backend, others are unimplemented stubs.)
 - **Plan before implementing on multi-file changes.** State the files you'll touch, the order, and the test you'll run to verify. Wait for approval on anything spanning more than 3 files.
 - **Commit messages reference the spec.** "Implement record_finding per docs/tool-contracts.md § findings (Hunt-side)" is the right shape. "Add finding support" is not.
+
+## Gotchas
+
+- **Running in a git worktree:** the `.venv` is at the main repo root and `flosswing` imports from your CWD — so run tools from the worktree dir. But the git-ignored `.env` is NOT copied into worktrees; for anything hitting the API (`scan`, `eval`, integration tests) pass `flosswing --env-file <main-repo>/.env ...` or export creds.
 
 ## When in doubt
 
