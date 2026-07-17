@@ -146,9 +146,8 @@ class SelectableDataTable(DataTable[Any]):
         text = "\n".join(self._content_lines()[offset + lo : offset + hi + 1])
         if not text:
             return
-        self.app.copy_to_clipboard(text)
         self.screen.selections = {
-            self: Selection(Offset(0, offset + lo), Offset(2**31, offset + hi))
+            self: Selection(Offset(0, offset + lo), Offset(0, offset + hi))
         }
         n = hi - lo + 1
         self.notify(f"Copied {n} row{'s' if n != 1 else ''} to clipboard")
