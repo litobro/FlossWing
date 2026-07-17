@@ -97,6 +97,7 @@ def test_walker_git_mode_used_when_dot_git_exists(tmp_path: Path) -> None:
     assert cmd[0] == "git"
     assert "ls-files" in cmd
     assert "-z" in cmd
+    assert "--recurse-submodules" in cmd
     assert files == ["src/example/cli.py", "src/example/util.py"]
 
 
@@ -165,3 +166,22 @@ def test_walker_handles_empty_allowlist(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, {"src/main.py": "pass\n"})
     files = list(walker.walk(repo, languages_allowlist=set()))
     assert files == []
+
+
+def test_walker_git_mode_recurses_submodules(tmp_path: Path) -> None:
+    """--recurse-submodules is passed and submodule files are yielded."""
+    repo = _make_git_repo(tmp_path, {
+        "glue.py": "pass\n",
+        "vendor/lib/mod.py": "def f(): pass\n",  # inside a submodule work-tree
+    })
+    fake_output = b"glue.py\x00vendor/lib/mod.py\x00"
+    fake_proc = MagicMock(returncode=0, stdout=fake_output, stderr=b"")
+    with patch.object(subprocess, "run", return_value=fake_proc) as m:
+        files = sorted(
+            str(p.relative_to(repo)) for p, _ in walker.walk(
+                repo, languages_allowlist={"python"}
+            )
+        )
+    args, _ = m.call_args
+    assert "--recurse-submodules" in args[0]
+    assert files == ["glue.py", "vendor/lib/mod.py"]

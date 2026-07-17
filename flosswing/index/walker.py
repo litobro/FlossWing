@@ -85,7 +85,10 @@ def _walk_git(
     """git ls-files -z mode."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "-z"],
+            [
+                "git", "-C", str(repo_root),
+                "ls-files", "-z", "--recurse-submodules",
+            ],
             capture_output=True,
             timeout=_GIT_LS_FILES_TIMEOUT_SECONDS,
             check=False,
