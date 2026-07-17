@@ -44,6 +44,7 @@ from ulid import ULID
 from flosswing.agent.runtime import run_session
 from flosswing.config import Config
 from flosswing.errors import FlosswingError, ToolValidationError
+from flosswing.prompts import load_attack_class_fragment
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, HuntTask
 from flosswing.tools import findings as t_findings
@@ -53,14 +54,6 @@ from flosswing.tools import symbols as t_symbols
 
 _PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "prompts"
 _HUNT_SYSTEM_PROMPT_PATH = _PROMPTS_ROOT / "system" / "hunt.md"
-_ATTACK_CLASS_DIR = _PROMPTS_ROOT / "attack_classes"
-
-_GENERIC_FRAGMENT_FALLBACK = (
-    "No attack-class-specific guidance has been authored for "
-    "`{attack_class}` yet. Apply general code-review principles for "
-    "this class, lean toward `confidence='speculative'`, and stop "
-    "after a single pass through the scope hint."
-)
 
 SessionFactory = sessionmaker[Session]
 
@@ -93,21 +86,8 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _load_attack_class_fragment(attack_class: str) -> str:
-    """Load the per-attack-class prompt fragment, or a generic fallback.
-
-    Per design decision #3, this lives as a private helper here in
-    stages/hunt.py rather than in prompts/__init__.py — single consumer.
-    Lift to a shared API only when Validate / Gapfill need it.
-    """
-    p = _ATTACK_CLASS_DIR / f"{attack_class}.md"
-    if p.exists():
-        return p.read_text(encoding="utf-8")
-    return _GENERIC_FRAGMENT_FALLBACK.format(attack_class=attack_class)
-
-
 def _compose_user_prompt(task: HuntTask) -> str:
-    fragment = _load_attack_class_fragment(task.attack_class)
+    fragment = load_attack_class_fragment(task.attack_class)
     return (
         f"Attack class: {task.attack_class}\n"
         f"Scope hint:   {task.scope_hint}\n"

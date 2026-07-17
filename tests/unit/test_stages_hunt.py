@@ -23,6 +23,7 @@ from ulid import ULID
 
 from flosswing.agent.runtime import SessionResult
 from flosswing.config import Config
+from flosswing.prompts import load_attack_class_fragment
 from flosswing.stages import hunt
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, HuntTask, Run
@@ -30,6 +31,22 @@ from flosswing.state.models import AgentSession, Finding, HuntTask, Run
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def test_shared_loader_returns_authored_fragment() -> None:
+    from flosswing.prompts import load_attack_class_fragment
+
+    assert "Attack class: command_injection" in load_attack_class_fragment(
+        "command_injection"
+    )
+
+
+def test_shared_loader_falls_back_for_unauthored_class() -> None:
+    from flosswing.prompts import load_attack_class_fragment
+
+    assert "No attack-class-specific guidance" in load_attack_class_fragment(
+        "buffer_overflow"
+    )
 
 
 @pytest.fixture()
@@ -382,12 +399,12 @@ async def test_hunt_findings_total_in_result(
 
 
 def test_attack_class_fragment_loader_returns_seeded_class() -> None:
-    text = hunt._load_attack_class_fragment("command_injection")
+    text = load_attack_class_fragment("command_injection")
     assert "command_injection" in text.lower() or "shell" in text.lower()
 
 
 def test_attack_class_fragment_loader_falls_back_for_unknown() -> None:
-    text = hunt._load_attack_class_fragment("buffer_overflow")
+    text = load_attack_class_fragment("buffer_overflow")
     assert "speculative" in text.lower()
 
 
