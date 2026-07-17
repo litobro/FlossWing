@@ -35,25 +35,16 @@ in-bounds but happens at the wrong time. This class is C/C++ only.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` — pointing at the *use* site
-  (the deref after free), and cite the freeing site in the description.
-- A `description` establishing both events and the path between them: where
-  the memory is freed, where it is used, and why the two can occur in that
-  order for one allocation.
-- A `poc_code` PoC is decisive. A small self-contained C/C++ program that
-  reproduces the free-then-use (or double-free) and **crashes under
-  AddressSanitizer** — a `heap-use-after-free` or `attempting double-free`
-  report, or a `SIGSEGV` — is direct proof. Run it through
-  `compile_and_run` and attach the returned `poc_result`. For container
-  invalidation, a PoC that provokes the reallocation and reads the stale
-  pointer under ASan is the cleanest demonstration.
-- Confidence: `confirmed` only when a `compile_and_run` PoC (ASan) or a
-  reachability trace demonstrates the temporal violation; `likely` when the
-  free and the later use are both traced but not executed; `speculative`
-  when the ordering or aliasing is uncertain.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

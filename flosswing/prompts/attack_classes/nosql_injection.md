@@ -33,23 +33,16 @@ A query built from request data where operator objects or JS can slip in.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, and `compile_and_run`, reporting through
-`record_finding`. The decisive question is *type discipline at the
-boundary*: does the request value reach the query still able to be an
-object? Use `find_callers`/`grep` to trace the field from the request
-parser to the query and check for a cast/validation step. A finding
-should carry `file`, `function`, `line_start`, `line_end` at the query
-sink, a `description` tracing the untrusted field into the query
-document and stating why an object/operator is not rejected, and a
-`poc_code` payload (e.g. `password[$ne]=x` or a `{"$gt": ""}` JSON body,
-or a `$where` string). `compile_and_run` is genuinely useful here when
-you can run the driver against an in-memory/scratch store (e.g.
-`mongomock`, an embedded engine) and show the operator payload returning
-rows a scalar would not — attach `poc_result` and claim `confirmed`; a
-`$where` PoC that evaluates injected JS is likewise `confirmed`. A clean
-end-to-end trace without execution is `likely`; an unclear parser shape
-or unproven reachability is `speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

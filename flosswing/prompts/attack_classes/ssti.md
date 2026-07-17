@@ -37,22 +37,16 @@ user data in its context.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, and `compile_and_run`, reporting through
-`record_finding`. The pivotal distinction is *which argument* the user
-value lands in — the compiled source (vulnerable) or the render context
-(safe). Use `find_definition`/`find_callers` to trace the request field
-to the compile/render call and confirm it is the template argument. A
-finding should carry `file`, `function`, `line_start`, `line_end` at the
-compile/render sink, a `description` establishing that user input is the
-template source and why the engine evaluates it, and a `poc_code`
-payload (`{{7*7}}` as a probe, then the engine-specific RCE gadget).
-`compile_and_run` is strong evidence here: rendering is self-contained,
-so a harness that feeds the payload through the same engine/config and
-shows `7*7` evaluating to `49` (or a sandbox-side command executing)
-earns `confidence=confirmed` — attach `poc_result`. A clean end-to-end
-trace without execution is `likely`; unclear reachability of the sink
-with attacker data is `speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

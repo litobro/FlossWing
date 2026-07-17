@@ -30,24 +30,18 @@ is the pickle wire format.
 Grep leads: `pickle.load`, `read_pickle`, `allow_pickle=True`,
 `torch.load`, `serializer="pickle"`, `Unpickler`.
 
-## Evidence a finding should include
+## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` at the unpickle call
-  site, plus the argument-flow story from the external source to the
-  sink in `description`.
-- A `poc_code` sketch: a malicious payload class whose `__reduce__`
-  returns an innocuous marker (e.g. writing a file under `/scratch` or
-  returning a sentinel), showing that unpickling executes it. When you
-  can build a self-contained harness that feeds the payload to the
-  sink, run it through `compile_and_run` and attach the `poc_result`.
-- Confidence: `confirmed` only when a `compile_and_run` PoC actually
-  demonstrates code execution through the sink (or a trace proves
-  attacker reachability); `likely` if you can trace external input to
-  the sink end-to-end but did not run it; `speculative` if the input's
-  provenance or reachability is unclear.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

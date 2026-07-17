@@ -34,19 +34,16 @@ type-embedding or gadget-capable decoder.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Trace the
-bytes from the entry point (which header/field/cookie) to the decode
-sink; use `find_callers` to confirm the payload is attacker-reachable
-and not internally produced. A finding should carry `file`,
-`function`, `line_start`, `line_end` at the deserialize call and a
-`description` naming the decoder, why type metadata is honored, and a
-plausible gadget/injection path. A self-contained `compile_and_run`
-PoC that feeds a crafted payload and demonstrates unintended object
-construction or a side effect earns `confidence=confirmed` (attach
-`poc_result`). An end-to-end trace without execution is `likely`;
-inability to establish that a usable gadget exists in scope is
-`speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

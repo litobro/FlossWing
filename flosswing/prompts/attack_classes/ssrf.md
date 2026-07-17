@@ -29,18 +29,16 @@ document URLs, redirect-following) reaching an outbound-request sink.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. This attack
-class permits network in the sandbox (`network_permitted=True`), so a
-`compile_and_run` PoC is feasible: stand up a controlled loopback
-listener in the same PoC (bind `127.0.0.1:<port>`), drive the sink
-with that URL, and show the server-side fetch reaching it — pass
-`network=True` and attach the `poc_result`. A finding should carry
-`file`, `function`, `line_start`, `line_end` at the request sink and a
-`description` tracing the host/URL from entry point to sink. A PoC
-that demonstrates the fetch reaching a chosen internal target earns
-`confidence=confirmed`; an end-to-end dataflow trace without execution
-is `likely`; an unclear link in the chain is `speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

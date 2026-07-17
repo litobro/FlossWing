@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from flosswing import attack_classes as ac
 from flosswing.errors import InvalidAttackClassError
+
+_RECON_PROMPT = (
+    Path(__file__).resolve().parents[2]
+    / "flosswing"
+    / "prompts"
+    / "system"
+    / "recon.md"
+)
 
 
 def test_known_attack_classes_match_architecture_md() -> None:
@@ -56,6 +66,19 @@ def test_every_registry_class_has_authored_fragment() -> None:
         ):
             missing.append(name)
     assert not missing, f"registered classes without an authored fragment: {missing}"
+
+
+def test_recon_prompt_lists_every_registry_class() -> None:
+    """The Recon prompt's valid-class list must not drift from REGISTRY.
+
+    `recon.md` hardcodes the classes Recon may enqueue (the agent can only
+    emit names it is shown). It duplicates REGISTRY by hand, so a new class
+    added to the registry but not the prompt is invisible to Recon. Guard
+    the two against silent drift.
+    """
+    text = _RECON_PROMPT.read_text(encoding="utf-8")
+    missing = [name for name in ac.REGISTRY if f"`{name}`" not in text]
+    assert not missing, f"classes in REGISTRY but not listed in recon.md: {missing}"
 
 
 def test_validate_accepts_known_class() -> None:

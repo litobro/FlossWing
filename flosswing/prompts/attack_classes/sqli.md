@@ -37,18 +37,16 @@ execute/query/exec sink without placeholders.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. A finding
-should carry `file`, `function`, `line_start`, `line_end` at the
-execute/query sink; a `description` tracing where the untrusted value
-enters, how it is concatenated into the SQL text, and why no binding
-guards it; and a `poc_code` string showing an injection input (e.g.
-`' OR '1'='1` or a stacked/`UNION` payload). A self-contained
-`compile_and_run` PoC that builds the query over a scratch SQLite/in-
-memory DB and demonstrates the injected clause changing the result set
-earns `confidence=confirmed` (attach `poc_result`). Trace the value
-into the query text end-to-end without executing → `likely`. If
-reachability of the sink with attacker data is unclear → `speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

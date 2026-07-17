@@ -28,23 +28,16 @@ class is Go only.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` — pointing at the *deref*
-  site, and cite the producing call (and its error path) in the description.
-- A `description` establishing the flow: which call can return a nil value,
-  why the error that accompanies it is ignored or bypassed, and where the
-  nil value is then dereferenced.
-- A `poc_code` PoC is decisive. A small self-contained Go program that
-  reproduces the shape and **panics** with `runtime error: invalid memory
-  address or nil pointer dereference` (or `assignment to entry in nil map`,
-  or an interface conversion panic) is direct proof. Run it through
-  `compile_and_run` and attach the returned `poc_result`.
-- Confidence: `confirmed` only when a `compile_and_run` PoC panics or a
-  reachability trace shows the nil value reaching the deref; `likely` when
-  both the nil-producing path and the deref are traced but not executed;
-  `speculative` when it is unclear the error path and the deref can co-occur.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

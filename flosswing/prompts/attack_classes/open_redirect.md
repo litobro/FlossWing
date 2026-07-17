@@ -31,19 +31,16 @@ reaching a redirect sink.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Trace the
-redirect target from the request field to the sink and confirm no
-allowlist or relative-only enforcement sits between them. A finding
-should carry `file`, `function`, `line_start`, `line_end` at the
-redirect call and a `description` naming the parameter and why an
-absolute external URL survives to the `Location`. A `compile_and_run`
-PoC is often only partially probative here (redirection is a
-protocol-level effect, not local execution): a PoC that invokes the
-handler and shows the emitted `Location` equal to an external
-attacker URL supports `confidence=confirmed`; a clean end-to-end
-dataflow trace without execution is `likely`; uncertainty about
-whether the value reaches the header unfiltered is `speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

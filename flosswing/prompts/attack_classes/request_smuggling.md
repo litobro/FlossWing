@@ -36,21 +36,16 @@ paths, and any manual chunk decoding.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. The proof is
-that *two* processors can disagree, which usually means reasoning about a
-proxy-to-backend hop rather than a single runnable program — so a
-`framing-construction trace` (e.g. showing the forwarder emits both CL
-and TE, or the chunk parser accepts a size a peer would reject) is
-normally the ceiling at `confidence=likely`. A `compile_and_run` PoC can
-sometimes confirm one half — feed a crafted request to the hand-rolled
-parser and show it frames the body differently than the spec requires —
-which raises that parser's finding to `confirmed`; full two-hop
-desync is rarely reproducible in the sandbox. If the forwarding or
-dual-processor topology is unclear, it is `speculative`. A finding
-should carry `file`, `function`, `line_start`, `line_end` at the framing
-emit/parse site and a `description` naming the CL/TE disagreement
-(CL.TE / TE.CL / TE.TE) and the two hops that would differ.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

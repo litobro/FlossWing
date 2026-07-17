@@ -36,22 +36,16 @@ directory search or bind.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, and `compile_and_run`, reporting through
-`record_finding`. Most targets have no live directory server in the
-sandbox, so executing the injection end-to-end is usually impossible and
-a data-flow trace is the ceiling — `likely` is the honest confidence.
-Use `find_definition`/`find_callers` to follow the user value into the
-filter/DN construction and confirm no escaping helper sits in between. A
-finding should carry `file`, `function`, `line_start`, `line_end` at the
-search/bind sink, a `description` tracing the value into the filter and
-naming the missing escape, and a `poc_code` string showing an injection
-input (e.g. `*)(uid=*` or `admin)(|(password=*`). `compile_and_run`
-helps only in the rare case you can stand up an embedded/mock LDAP and
-demonstrate the filter matching more than it should — attach
-`poc_result` and claim `confirmed`. A clean end-to-end trace without
-execution is `likely`; an unclear source or unproven reachability is
-`speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

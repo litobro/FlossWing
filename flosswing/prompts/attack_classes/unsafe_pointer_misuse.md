@@ -31,24 +31,16 @@ presence of `unsafe`. This class is Go only.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` — pointing at the offending
-  conversion, and name which `unsafe.Pointer` rule it violates.
-- A `description` explaining the mechanism: why the GC or the memory model
-  can invalidate the pointer here, and what the observable corruption is.
-- A `poc_code` PoC where feasible. A self-contained Go program that
-  demonstrates the misuse and **fails under `-race` or crashes** — or, for
-  the `uintptr`-across-statements case, one where `go vet`'s `unsafeptr`
-  check flags the pattern — is strong evidence. Run it through
-  `compile_and_run` and attach the returned `poc_result`. Note that GC-timing
-  bugs are probabilistic, so a clean run does not disprove the finding;
-  a trace-based argument may be the strongest available evidence.
-- Confidence: `confirmed` only when a `compile_and_run` PoC (or vet/race
-  report) or a reachability trace demonstrates the rule violation reaching
-  a live use; `likely` when the misuse pattern is traced but not executed;
-  `speculative` when the layout/lifetime argument is uncertain.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

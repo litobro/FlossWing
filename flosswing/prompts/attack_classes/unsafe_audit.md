@@ -29,23 +29,16 @@ not the presence of `unsafe` itself. This class is Rust only.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` — pointing at the `unsafe`
-  operation, and name the specific invariant that is not upheld.
-- A `description` establishing the gap: what the operation requires, why the
-  surrounding code does not guarantee it, and what input reaches it.
-- A `poc_code` PoC is decisive. A self-contained Rust program that drives the
-  block with invalidating input and **panics, aborts, or exhibits UB
-  detectable under Miri** (`cargo miri run` reporting UB) — or a plain
-  build that segfaults / triggers a bounds abort — is direct proof. Run it
-  through `compile_and_run` and attach the returned `poc_result`.
-- Confidence: `confirmed` only when a `compile_and_run` PoC (Miri UB report,
-  panic, or crash) or a reachability trace demonstrates the invariant being
-  violated by reachable input; `likely` when the unmet precondition is
-  traced but not executed; `speculative` when the invariant argument is
-  unclear.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

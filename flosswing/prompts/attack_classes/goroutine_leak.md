@@ -29,25 +29,16 @@ Go only.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` — pointing at the goroutine
-  launch or the blocking operation that never unblocks.
-- A `description` establishing the leak: which request path starts the
-  goroutine, on what operation it blocks, why nothing ever unblocks or
-  cancels it, and how repeated requests amplify it.
-- A `poc_code` PoC where feasible. A self-contained Go program that starts
-  the leaking pattern in a loop and shows growth via
-  `runtime.NumGoroutine()`, or one that **panics with `all goroutines are
-  asleep - deadlock!`** when the leak is the only remaining goroutine, is
-  direct evidence. Run it through `compile_and_run` and attach the returned
-  `poc_result`.
-- Confidence: `confirmed` only when a `compile_and_run` PoC demonstrates the
-  unbounded growth / permanent block, or a reachability trace shows the
-  goroutine has no exit on the attacker-reachable path; `likely` when the
-  blocking path is traced but not executed; `speculative` when it is unclear
-  whether a counterparty or cancellation exists.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

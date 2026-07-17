@@ -30,20 +30,16 @@ ReDoS. Note the engine explicitly and do not report it.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. This is the one
-class where execution is decisive: build a `compile_and_run` PoC that
-compiles the exact pattern on the same engine and times it against a
-short pathological input versus a benign one of equal length. A
-super-linear blow-up (e.g. seconds on a few dozen characters) is strong
-`confidence=confirmed` evidence — attach the timing in `poc_result`.
-Without a run, an end-to-end trace showing the untrusted subject reaching
-the vulnerable pattern with no length cap is `likely`. If you cannot
-confirm the input is attacker-controlled or that the pattern actually
-backtracks, it is `speculative`. A finding should carry `file`,
-`function`, `line_start`, `line_end` at the pattern (or the match call)
-and a `description` naming the engine, the ambiguous construct, and the
-input path.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

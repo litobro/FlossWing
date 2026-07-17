@@ -31,24 +31,16 @@ C/C++ only.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` — pointing at the deref
-  site, and cite the NULL-producing call in the description.
-- A `description` explaining what makes the pointer NULL (which call can
-  return NULL and under what attacker-reachable condition) and why no check
-  intervenes before the deref.
-- A `poc_code` PoC is decisive. A small self-contained C/C++ program that
-  forces the NULL (e.g. an allocation-failure shim, a lookup miss, or
-  malformed input) and reaches the deref will **crash with SIGSEGV** — the
-  signal appears in `poc_result.run.signal`, and AddressSanitizer reports a
-  `SEGV on unknown address 0x000000000000` (a null deref). Run it through
-  `compile_and_run` and attach the returned `poc_result`.
-- Confidence: `confirmed` only when a `compile_and_run` PoC (SIGSEGV / ASan
-  null-address report) or a reachability trace demonstrates the deref;
-  `likely` when the NULL source and the unchecked deref are traced but not
-  run; `speculative` when reachability of the NULL case is unclear.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

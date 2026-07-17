@@ -35,23 +35,16 @@ after the check and before the use.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Establish two
-things: that the check and the use resolve the resource *separately*
-(same path/key re-referenced, not a shared fd/handle), and that an
-attacker can reach the intervening window (shared directory, predictable
-name, concurrent request path). Races are hard to trigger
-deterministically, so a `compile_and_run` PoC that reliably wins the
-window is rarely achievable — a traced check-then-use gap on an
-attacker-reachable resource is normally the ceiling at
-`confidence=likely`. Reserve `confirmed` for the rare case where you
-either land a reproducible race in the sandbox or trace an unambiguous
-reachability path from an untrusted entry point to both operations. An
-unclear link — you cannot show the attacker shares the resource, or the
-two operations may actually be atomic — is `speculative`. A finding
-should carry `file`, `function`, `line_start`, `line_end` spanning the
-check and the use, and a `description` naming the resource, the window,
-and the attacker's swap.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

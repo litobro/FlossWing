@@ -40,26 +40,16 @@ route with no policy check.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, and `compile_and_run`, and you report through
-`record_finding`. Authorization flaws are usually a *reasoning* about
-missing enforcement, not something you can execute in isolation — there
-is no server, session, or second principal in the sandbox — so an
-end-to-end trace is normally the ceiling and `likely` is the honest
-confidence. Use `find_callers`/`grep` to confirm the id reaches the
-query unscoped and that no upstream middleware or decorator supplies the
-missing check; use `find_definition` to inspect the ORM/query call and
-any policy helper. A finding should carry `file`, `function`,
-`line_start`, `line_end` at the unscoped query or the unguarded route,
-and a `description` naming the identifier, the sink, and the absent
-ownership/tenant/role check. `compile_and_run` rarely proves this class
-directly; if you can build a self-contained harness that shows the query
-returns another principal's row given only their id, attach `poc_result`
-and claim `confirmed`. Traced-but-unrun (the standard case) →
-`confirmed` requires a genuine reachability trace showing the sink is
-hit with attacker-controlled id and no enforcement in between; a clean
-end-to-end trace without that rigor is `likely`; an unclear middleware
-chain or unproven reachability is `speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

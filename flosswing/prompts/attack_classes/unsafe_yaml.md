@@ -28,20 +28,16 @@ resolves language-object tags.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. A finding
-should carry `file`, `function`, `line_start`, `line_end` at the parse
-call; a `description` tracing where the untrusted YAML enters, that the
-loader honors object tags, and why nothing restricts it to a safe
-schema; and a `poc_code` document using a language-object tag (e.g. a
-`!!python/object/apply:os.system` payload) that would execute on parse.
-This class is PoC-friendly: a self-contained snippet that calls the same
-loader on a benign-but-observable tagged payload (e.g. one that writes a
-marker file or returns a sentinel) inside the sandbox demonstrates
-object instantiation — attach `poc_result` for `confidence=confirmed`.
-Trace untrusted bytes into an unsafe loader end-to-end without running →
-`likely`; if the input's untrustedness or the loader mode is unclear →
-`speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

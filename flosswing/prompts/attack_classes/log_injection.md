@@ -34,23 +34,16 @@ fields) with no sanitization.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, and `compile_and_run`, reporting through
-`record_finding`. Trace the request field into the log call with
-`find_callers`/`grep` and check for any newline/control-char stripping
-or structured-field encoding on the path. A finding should carry
-`file`, `function`, `line_start`, `line_end` at the log call, a
-`description` tracing the untrusted field into the message and noting the
-absence of CR/LF neutralization, and a `poc_code` payload showing a
-forged line (input containing `\n` followed by a fake `INFO ...` record,
-or an ANSI escape). `compile_and_run` helps here: logging is
-self-contained, so a small harness that logs the crafted input and shows
-the captured output split into a forged second line (or a format-string
-value being interpreted) earns `confidence=confirmed` — attach
-`poc_result`. A clean end-to-end trace without execution is `likely`; an
-unclear source or uncertain reachability is `speculative`. Severity is
-usually low/medium unless the forged lines feed a security-critical
-parser or the format-string path enables a leak/crash.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

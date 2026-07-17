@@ -33,21 +33,16 @@ records) reaches an HTML/JS/DOM sink without being encoded for it.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. A finding
-should carry `file`, `function`, `line_start`, `line_end` at the sink;
-a `description` naming the injection context (HTML body, attribute, JS
-string, URL) and tracing where the value enters and why the encoding
-for that context is absent; and a `poc_code` string with a payload
-appropriate to the context (e.g. `<script>alert(1)</script>` or an
-attribute-breakout `" onmouseover=alert(1) x="`). XSS executes in a
-browser, so `compile_and_run` (a server-side sandbox) usually cannot
-*demonstrate* script execution — a PoC that merely re-emits the string
-is non-probative. Prefer `confidence=likely` when you trace an
-unencoded value into a browser context end-to-end; `confirmed` only if
-a reachability trace or a runnable check genuinely establishes the sink
-receives attacker data unencoded; `speculative` if the context or
-reachability is unclear.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

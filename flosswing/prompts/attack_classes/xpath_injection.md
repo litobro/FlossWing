@@ -31,21 +31,16 @@ request bodies), then evaluated against an XML document.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, and `compile_and_run`, reporting through
-`record_finding`. Trace the untrusted value into the expression with
-`find_callers`/`grep` and confirm no variable binding or escaping sits
-between source and sink. A finding should carry `file`, `function`,
-`line_start`, `line_end` at the compile/evaluate sink, a `description`
-tracing the value into the expression and naming the missing
-parameterization, and a `poc_code` payload (e.g. `' or '1'='1` or `x']
-| //password | //user[name='`). `compile_and_run` is well-suited here:
-XPath evaluation is self-contained, so a small harness that builds the
-expression over a scratch XML document and shows the injected clause
-returning extra nodes (or accepting a bad login) earns
-`confidence=confirmed` — attach `poc_result`. A clean end-to-end trace
-without execution is `likely`; an unclear source or unproven
-reachability of the sink is `speculative`.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

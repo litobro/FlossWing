@@ -15,7 +15,7 @@ argv, HTTP request bodies and query strings, file contents, stdin,
 environment variables, IPC messages), then hands that string to the
 language's shell-passthrough subprocess APIs.
 
-Language-by-language indicators:
+Language-by-language indicators (this is the v0.3 supported set):
 
 - **Python.** A subprocess call whose argument is a single concatenated
   string AND whose API runs the string through `/bin/sh` — the
@@ -44,22 +44,20 @@ Language-by-language indicators:
 - **Rust.** The standard-library command builder configured with
   `sh -c <user>` — same shape, just spelled out.
 
-## Evidence a finding should include
+## Evidence a finding should include (v0.3 tool restrictions)
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
+You have `read_file`, `list_dir`, `grep`, and `record_finding` only.
+`compile_and_run` is not available, so a finding cannot include a
+real execution result. Aim for:
 
 - `file`, `function`, `line_start`, `line_end` — pointing at the
   shell-passthrough call site.
 - A 1–3 sentence `description` of the argument flow: where the user
   data enters, how it reaches the sink, and why it isn't escaped.
-- A `poc_code` sketch showing what input would demonstrate the bug.
-  When you can build a self-contained PoC, run it through
-  `compile_and_run` and attach the returned `poc_result`; otherwise
-  leave that field unset.
-- Confidence: `confirmed` only when a `compile_and_run` PoC (or a
-  reachability trace) actually demonstrates execution; `likely` if you
-  can trace the argument flow end-to-end but did not run it;
+- A short, textual `poc_code` sketch showing what input would
+  demonstrate the bug. Do **not** invent a `poc_result` — leave that
+  field unset.
+- Confidence: `likely` if you can trace the argument flow end-to-end,
   `speculative` if a piece of the chain is unclear.
 
 ## Common false positives

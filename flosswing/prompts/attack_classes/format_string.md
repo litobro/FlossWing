@@ -32,26 +32,16 @@ dangerous as the template. This class is C/C++ only.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, `compile_and_run`, and `record_finding`. Aim for:
-
-- `file`, `function`, `line_start`, `line_end` — pointing at the
-  `printf`-family call whose format argument is untrusted.
-- A `description` tracing the format argument from its untrusted source to
-  the call, and confirming it is the *format* parameter, not a `%s`
-  operand.
-- A `poc_code` PoC is decisive. A small self-contained C/C++ program that
-  reaches the sink with a crafted format (e.g. a string of `%x`/`%p` to
-  dump argument memory, or `%n` to attempt a write) demonstrates the
-  vulnerability: memory bytes appear in `stdout`, or the `%n` write faults
-  with `SIGSEGV` (visible in `poc_result.run.signal`), and AddressSanitizer
-  may report the invalid access. Run it through `compile_and_run` and
-  attach the returned `poc_result`. Compiling with `-Wformat-security`
-  producing a diagnostic in `build.stderr` is corroborating evidence.
-- Confidence: `confirmed` only when a `compile_and_run` PoC (leaked bytes
-  or a `%n` crash) or a reachability trace demonstrates the flaw; `likely`
-  when the untrusted format is traced to the sink but not executed;
-  `speculative` when the format argument's origin is unclear.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 

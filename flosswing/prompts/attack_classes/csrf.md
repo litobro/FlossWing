@@ -33,20 +33,16 @@ a cookie/session, and (c) has no unforgeable per-request check.
 
 ## Evidence
 
-You have `read_file`, `list_dir`, `grep`, `find_definition`,
-`find_callers`, and `record_finding` (plus `compile_and_run`, rarely
-useful here). A finding should carry `file`, `function`, `line_start`,
-`line_end` at the handler and its route registration; a `description`
-establishing the three conditions — the state change, that auth is
-cookie/session-based, and that no token/Origin/custom-header check
-guards it; and a `poc_code` sketch of the cross-site form or `fetch`
-(with `credentials: 'include'`) that would drive the action. CSRF turns
-on browser cookie behavior the sandbox cannot reproduce, so
-`compile_and_run` is generally non-probative here. Use
-`confidence=likely` when you trace an unprotected mutating cookie-auth
-handler end-to-end; `confirmed` only with a reachability trace showing
-no middleware/decorator interposes a check; `speculative` when the auth
-model or a global CSRF filter's coverage is unclear.
+Hunt's v0.3 toolset is `read_file`, `list_dir`, `grep`, `find_definition`,
+`find_callers`, and `record_finding` — there is no `compile_and_run`, so a
+finding cannot carry a real execution result. Use `find_definition` and
+`find_callers` to trace how untrusted data reaches the sink. A finding should
+carry `file`, `function`, `line_start`, `line_end` at the sink plus a
+`description` of that flow, and a short **textual** `poc_code` sketch of the
+triggering input. Do **not** fabricate a `poc_result` — leave it unset.
+Confidence: `likely` when you can trace the flow end-to-end, `speculative`
+when a link in the chain is unclear. Do **not** use `confirmed`; it requires
+execution Hunt cannot perform in v0.3.
 
 ## Common false positives
 
