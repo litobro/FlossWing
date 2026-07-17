@@ -177,6 +177,31 @@ async def test_findings_screen_lists_finding(seeded_db: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_screen_tables_are_selectable(seeded_db: str) -> None:
+    # Every DataTable in the dashboard must be the copy-enabled subclass so
+    # rows can be mouse-selected and copied (see flosswing/tui/widgets.py).
+    from flosswing.tui.screens.findings import FindingsScreen
+    from flosswing.tui.screens.run_detail import RunDetailScreen
+    from flosswing.tui.screens.sessions import SessionsScreen
+    from flosswing.tui.widgets import SelectableDataTable
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen.query_one("#runs-table"), SelectableDataTable)
+        for screen, table_id in (
+            (RunDetailScreen(seeded_db), "#hunt-table"),
+            (SessionsScreen(seeded_db), "#sessions-table"),
+            (FindingsScreen(seeded_db), "#findings-table"),
+        ):
+            app.push_screen(screen)
+            await pilot.pause()
+            assert isinstance(app.screen.query_one(table_id), SelectableDataTable)
+            app.pop_screen()
+            await pilot.pause()
+
+
+@pytest.mark.asyncio
 async def test_finding_detail_renders_poc(seeded_db: str) -> None:
     from textual.widgets import Markdown
 

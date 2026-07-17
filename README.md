@@ -205,6 +205,23 @@ Needs a real terminal (TTY). The `textual` dependency installs with
 the package. Repo-derived text is rendered literally, so untrusted
 finding content can't inject terminal markup or open links.
 
+**Copy & paste.** In the runs/findings/sessions tables, **drag the mouse
+over rows** to copy them — on release their *full*, untruncated run IDs
+and paths go to the system clipboard (over SSH too, via OSC 52) and a
+"Copied N row(s)" notice appears. `ctrl+c` / `ctrl+shift+c` re-copy the
+last dragged rows. On the finding-detail screen (rendered text) drag to
+select and press `ctrl+c`. Paste works normally in the "new scan" input
+fields.
+
+`ctrl+shift+c` is also your terminal's own copy shortcut, so whether it
+reaches the app depends on the terminal: terminals using the Kitty
+keyboard protocol (kitty, ghostty, foot, WezTerm, recent Alacritty)
+forward it; terminals that intercept it copy their *own* selection
+instead. To force the latter on the text screens, hold **shift** while
+dragging to bypass the app's mouse capture and make a native terminal
+selection — note that copies the raw on-screen text, so truncated cells
+copy truncated. Either way, `ctrl+c` always works in-app.
+
 ### Score against the eval corpus
 
 Measure detection quality against known-vulnerability ground truth.

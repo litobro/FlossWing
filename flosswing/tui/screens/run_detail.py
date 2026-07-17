@@ -29,6 +29,7 @@ from textual.widgets import DataTable, Footer, Header, Static
 
 from flosswing.tui import data
 from flosswing.tui.screens.runs import _LIVE_GLYPH
+from flosswing.tui.widgets import SelectableDataTable
 
 _GLYPH = {"done": "✓", "active": "▶", "pending": "…", "n/a": "·"}
 # Must stay in sync with the state values emitted by data._derive_stages;
@@ -53,7 +54,7 @@ class RunDetailScreen(Screen[None]):
         yield Static("", id="stage-strip")
         yield Static("", id="run-meta")
         yield Static("", id="recent-activity")
-        yield DataTable(id="hunt-table", cursor_type="row")
+        yield SelectableDataTable(id="hunt-table", cursor_type="row")
         yield Footer()
 
     def on_mount(self) -> None:

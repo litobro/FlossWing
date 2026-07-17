@@ -27,6 +27,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header
 
 from flosswing.tui import data
+from flosswing.tui.widgets import SelectableDataTable
 
 
 class SessionsScreen(Screen[None]):
@@ -38,7 +39,7 @@ class SessionsScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(id="sessions-table", cursor_type="row")
+        yield SelectableDataTable(id="sessions-table", cursor_type="row")
         yield Footer()
 
     def on_mount(self) -> None:

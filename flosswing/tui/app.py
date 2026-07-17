@@ -18,7 +18,10 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import App
+from textual.binding import BindingType
 
 from flosswing.tui.launcher import ChildProcess
 
@@ -28,6 +31,16 @@ class FlosswingTUI(App[None]):
 
     TITLE = "FlossWing"
     SUB_TITLE = "vulnerability research dashboard"
+
+    # Textual already binds ctrl+c to copy the current selection. Also accept
+    # ctrl+shift+c — the terminal "copy" muscle memory — so it copies the app
+    # selection in terminals that forward the key (Kitty keyboard protocol:
+    # kitty, ghostty, foot, wezterm, recent alacritty). Terminals that instead
+    # intercept ctrl+shift+c as their own copy are unaffected. Copies via OSC 52
+    # when a selection exists and is a no-op otherwise (SkipAction).
+    BINDINGS: ClassVar[list[BindingType]] = [
+        ("ctrl+shift+c", "screen.copy_text", "Copy"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
