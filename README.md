@@ -95,6 +95,22 @@ guidance above before going public with anything.
 > actual token/cost usage (shown in the report and the `flosswing tui`
 > dashboard), and the per-stage `--*-token-budget` flags cap spend.
 
+> **Model choice & refusals:** newer, more cyber-capable Claude models run
+> real-time safety classifiers that can decline a request outright. Validate is
+> the stage most exposed to this, because confirming a finding means building
+> and running a working exploit — which is exactly the content those
+> classifiers target. When it fires, the pipeline does not crash: the run
+> finishes, but the finding stays `pending_validation` and the session is
+> recorded as `errored` with `assistant_error: invalid_request` rather than
+> `refused`, so `flosswing eval` scores the missed finding as a false negative.
+> If eval recall drops sharply after a model change and the `errored` count
+> rises, suspect a refusal before suspecting a bug. Observed with
+> `claude-opus-5` (refusal category `cyber`) against `tests/corpus/v02_smoke`
+> on 2026-07-24; the default `claude-opus-4-8` did not exhibit it on that
+> corpus. If your use case needs a model that refuses, Anthropic documents an
+> exemption process for legitimate security research at
+> <https://support.claude.com/en/articles/14604842-real-time-cyber-safeguards-on-claude>.
+
 ## Install
 
 ```bash

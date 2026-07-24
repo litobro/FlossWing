@@ -28,3 +28,7 @@ env/
 .DS_Store
 *.swp
 *.swo
+
+# Linked git worktrees live here. Each is a full checkout; committing one
+# would nest the repo inside itself.
+.claude/worktrees/

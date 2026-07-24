@@ -93,6 +93,17 @@ def _classify(
     Pure function. Precedence matches the spec:
     api_error > refusal > budget > completed. ``cost_usd`` (the provider's
     authoritative figure, if any) is passed through unchanged on every branch.
+
+    ``refusal_text`` is reported on every non-error branch, not just the
+    refused one. The agent harness does not abort on a refused turn: it can
+    continue and terminate on a clean ``end_turn``, having still produced a
+    verdict. ``stop_reason`` therefore decides whether the refusal was
+    *terminal* (outcome ``refused``), while ``refusal_text`` records that a
+    refusal happened *somewhere* in the session. Bucketing a recovered
+    session as ``refused`` would discard the work it completed — stage
+    counters key off ``outcome`` and only consult the verdict under
+    ``completed`` — while dropping the text would hide that the run was
+    degraded. Both facts are needed, so both are reported.
     """
     input_tokens = int(usage.get("input_tokens", 0))
     output_tokens = int(usage.get("output_tokens", 0))
@@ -112,7 +123,7 @@ def _classify(
             error_text=scrub(api_error),
             cost_usd=cost_usd,
         )
-    if stop_reason == "refusal" or refusal_text:
+    if stop_reason == "refusal":
         return SessionResult(
             outcome="refused",
             input_tokens=input_tokens,
@@ -134,7 +145,7 @@ def _classify(
             cache_write_tokens=cache_write,
             duration_ms=0,
             tool_calls_count=0,
-            refusal_text=None,
+            refusal_text=scrub(refusal_text) if refusal_text else None,
             error_text=None,
             cost_usd=cost_usd,
         )
@@ -146,7 +157,7 @@ def _classify(
         cache_write_tokens=cache_write,
         duration_ms=0,
         tool_calls_count=0,
-        refusal_text=None,
+        refusal_text=scrub(refusal_text) if refusal_text else None,
         error_text=None,
         cost_usd=cost_usd,
     )

@@ -217,6 +217,22 @@ def _is_spurious_sdk_exit_error(exc: BaseException) -> bool:
     return _SPURIOUS_SDK_EXIT_ERROR_TEXT in str(exc)
 
 
+def _refusal_text_from_content(content: list[Any]) -> str | None:
+    """Join the text blocks of a synthetic refusal turn, or None if it had none.
+
+    A classifier refusal delivers its explanation as ordinary text on the
+    synthetic assistant turn — not in ``ResultMessage.result``, which is where
+    the refusal path otherwise reads from. Without this the operator sees that
+    a refusal happened but never why.
+    """
+    parts = [
+        text
+        for b in content
+        if type(b).__name__ == "TextBlock" and (text := getattr(b, "text", ""))
+    ]
+    return "\n".join(parts) or None
+
+
 def _harvest_usage(raw: dict[str, Any] | None) -> dict[str, int]:
     """Coerce SDK usage payload to the int-valued dict _classify expects.
 
@@ -384,8 +400,24 @@ class AnthropicSDKProvider:
                         _emit()
                     if message.stop_reason:
                         stop_reason = message.stop_reason
-                    # AssistantMessage.error is a Literal of error categories.
-                    if message.error:
+                    # A safety-classifier refusal arrives as a *synthetic*
+                    # assistant turn carrying BOTH stop_reason="refusal" and an
+                    # `error` category: AssistantMessageError has no refusal
+                    # member, so the SDK buckets it into the nearest one
+                    # ("invalid_request"). Reporting that as api_error would win
+                    # _classify's api_error > refusal precedence and launder a
+                    # refusal into a meaningless API error.
+                    #
+                    # refusal_text is sticky because the harness does NOT abort
+                    # on a refused turn: it continues and can terminate on a
+                    # clean end_turn, overwriting stop_reason. Only the sticky
+                    # text keeps the refusal visible to _classify.
+                    if message.stop_reason == "refusal":
+                        refusal_text = refusal_text or _refusal_text_from_content(
+                            message.content
+                        )
+                    elif message.error:
+                        # A genuine API error category (server_error, rate_limit…).
                         api_error = api_error or f"assistant_error: {message.error}"
                 elif isinstance(message, ResultMessage):
                     if message.stop_reason:

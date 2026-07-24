@@ -525,6 +525,22 @@ CREATE TABLE traces (
 --
 -- This is the table to query when "did the model refuse?" or "how much did
 -- this run cost?" — the per-stage breakdown comes from grouping on `stage`.
+--
+-- Reading refusals: `outcome='refused'` means the refusal was TERMINAL — the
+-- session stopped there. It is NOT the whole refusal population. The agent
+-- harness does not abort on a refused turn: a session can be refused on one
+-- tool call, recover, and finish cleanly, in which case `outcome` reflects
+-- that terminal state ('completed', or 'budget_exceeded') while
+-- `refusal_text` still records what was refused. So a session whose work was
+-- degraded by a refusal can legitimately read as 'completed'.
+--
+--   -- every session touched by a refusal, terminal or not:
+--   SELECT * FROM agent_sessions WHERE refusal_text IS NOT NULL;
+--
+-- `refusal_text` is NULL on `outcome='errored'`: a genuine API error outranks
+-- refusal state and clears it. There is deliberately no CHECK tying the two
+-- columns to `outcome` — the pairing is a provider-layer invariant
+-- (flosswing/agent/providers/base.py::_classify), not a storage one.
 
 CREATE TABLE agent_sessions (
     id                  TEXT NOT NULL,                   -- ULID
@@ -541,7 +557,7 @@ CREATE TABLE agent_sessions (
     cost_usd            REAL NOT NULL,                   -- computed at session-end from model pricing
     duration_ms         INTEGER NOT NULL,
     outcome             TEXT NOT NULL,                   -- see CHECK below
-    refusal_text        TEXT,                            -- captured when outcome='refused'
+    refusal_text        TEXT,                            -- refusal reason; set on ANY non-errored outcome (see note below)
     error_text          TEXT,                            -- captured when outcome='errored'
     tool_calls_count    INTEGER NOT NULL DEFAULT 0,
     started_at          TEXT NOT NULL,

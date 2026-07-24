@@ -405,11 +405,31 @@ tokens per Hunt session, 100k per Validate session. Configurable via `--token-bu
 When exceeded, session is killed and the task is marked `budget_exceeded`. Not a retry
 condition.
 
-**Refusal handling.** Track refusals as a distinct outcome (not a failure). When a
-session refuses, the orchestrator retries **once** with a rephrased prompt drawn from
-`prompts/refusal_rephrasings/`. If the retry also refuses, the task is marked
-`refused` and surfaced in the report. Do not retry more than once. Do not silently
-swallow refusals.
+**Refusal handling.** Track refusals as a distinct outcome (not a failure). Surface
+them in the report. Do not silently swallow refusals.
+
+A refused *turn* is not necessarily a refused *session*. The agent harness does not
+abort on a refusal: a session can be refused on one tool call, recover, and terminate
+cleanly having still produced its verdict. The two facts are therefore recorded
+separately. `agent_sessions.outcome='refused'` means the refusal was **terminal** —
+the session stopped there. `agent_sessions.refusal_text` is set whenever a refusal
+occurred at all, including on an otherwise-`completed` or `budget_exceeded` session,
+so that a run degraded by a refusal is never reported as an unqualified success. A
+genuine API error outranks both and clears `refusal_text`. Query `refusal_text IS NOT
+NULL` for the full refusal population; `outcome='refused'` is only the terminal
+subset. The pairing is enforced in `agent/providers/base.py::_classify`, not in the
+schema.
+
+In practice the common source is a safety classifier rather than the model declining
+in prose: cyber-capable models can refuse Validate-stage PoC execution under
+real-time safeguards, which is intrinsic to what Validate does. See README
+§ Requirements.
+
+**Not yet implemented — retry-once-on-refusal.** The intent is that the orchestrator
+retries **once** with a rephrased prompt drawn from `prompts/refusal_rephrasings/`,
+and marks the task `refused` if the retry also refuses; never more than one retry.
+Neither that directory nor any retry logic exists in the tree today — a refusal
+currently surfaces without a retry. This is an open requirement, not a dropped one.
 
 ## Tool contracts
 

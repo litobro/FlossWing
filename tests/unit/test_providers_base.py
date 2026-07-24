@@ -116,3 +116,77 @@ def test_classify_cost_defaults_none() -> None:
         api_error=None,
     )
     assert r.cost_usd is None
+
+
+# --- recovered refusals ----------------------------------------------------
+#
+# The agent harness does not abort on a refused turn: it continues and can
+# terminate on a clean end_turn, having produced real work. `stop_reason` is
+# therefore the discriminator for whether the refusal was TERMINAL, while
+# `refusal_text` records only that a refusal happened somewhere in the session.
+
+
+def test_classify_recovered_refusal_is_completed_but_keeps_text() -> None:
+    """A session that was refused mid-run and then finished cleanly is
+    `completed` — so the stage counts the verdict it produced — while still
+    reporting the refusal so the operator knows the run was degraded."""
+    r = base._classify(
+        stop_reason="end_turn",
+        usage={"input_tokens": 1250, "output_tokens": 233},
+        refusal_text="blocked: violative cyber content",
+        budget=200_000,
+        api_error=None,
+    )
+    assert r.outcome == "completed"
+    assert r.refusal_text == "blocked: violative cyber content"
+
+
+def test_classify_terminal_refusal_is_still_refused() -> None:
+    """When the refusal IS the terminal state, nothing recovered from it."""
+    r = base._classify(
+        stop_reason="refusal",
+        usage={"input_tokens": 10, "output_tokens": 0},
+        refusal_text="blocked: violative cyber content",
+        budget=200_000,
+        api_error=None,
+    )
+    assert r.outcome == "refused"
+    assert r.refusal_text == "blocked: violative cyber content"
+
+
+def test_classify_recovered_refusal_over_budget_keeps_text() -> None:
+    """budget_exceeded must not silently drop the refusal either."""
+    r = base._classify(
+        stop_reason="end_turn",
+        usage={"input_tokens": 300_000, "output_tokens": 1},
+        refusal_text="blocked",
+        budget=200_000,
+        api_error=None,
+    )
+    assert r.outcome == "budget_exceeded"
+    assert r.refusal_text == "blocked"
+
+
+def test_classify_api_error_still_outranks_a_refusal() -> None:
+    """Unchanged precedence: a real API error wins over refusal state."""
+    r = base._classify(
+        stop_reason="refusal",
+        usage={"input_tokens": 1, "output_tokens": 1},
+        refusal_text="blocked",
+        budget=200_000,
+        api_error="assistant_error: server_error",
+    )
+    assert r.outcome == "errored"
+    assert r.refusal_text is None
+
+
+def test_classify_no_refusal_leaves_text_none() -> None:
+    r = base._classify(
+        stop_reason="end_turn",
+        usage={"input_tokens": 1, "output_tokens": 1},
+        refusal_text=None,
+        budget=200_000,
+        api_error=None,
+    )
+    assert r.outcome == "completed"
+    assert r.refusal_text is None
