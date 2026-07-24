@@ -113,7 +113,7 @@ def test_make_on_usage_estimates_cost_when_snapshot_cost_none(db: str) -> None:
     on_usage(_snap(in_tok=1_000_000, out_tok=0, cost=None))
     row = _get(db)
     assert row is not None
-    assert row.cost_usd == 15.0  # estimated from tokens, not left at 0
+    assert row.cost_usd == 5.0  # estimated from tokens, not left at 0
 
 
 def test_seed_creates_zeroed_row_at_session_start(db: str) -> None:

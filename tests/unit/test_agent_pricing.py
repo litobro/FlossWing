@@ -22,11 +22,11 @@ from flosswing.agent import pricing
 
 
 def test_estimate_cost_basic_input_output() -> None:
-    # 1M input @ $15 + 1M output @ $75 = $90 for a known model.
+    # 1M input @ $5 + 1M output @ $25 = $30 for a known model.
     cost = pricing.estimate_cost_usd(
         model="claude-opus-4-8", input_tokens=1_000_000, output_tokens=1_000_000
     )
-    assert cost == 90.0
+    assert cost == 30.0
 
 
 def test_estimate_cost_unknown_model_falls_back_to_opus_rate() -> None:
@@ -36,7 +36,7 @@ def test_estimate_cost_unknown_model_falls_back_to_opus_rate() -> None:
     unknown = pricing.estimate_cost_usd(
         model="totally-made-up", input_tokens=1_000_000, output_tokens=0
     )
-    assert unknown == known == 15.0
+    assert unknown == known == 5.0
 
 
 def test_estimate_cost_accounts_for_cache_tokens() -> None:
@@ -53,8 +53,8 @@ def test_estimate_cost_accounts_for_cache_tokens() -> None:
         cache_read_tokens=1_000_000,
         cache_write_tokens=1_000_000,
     )
-    # 1M reads @ 15*0.1 + 1M writes @ 15*1.25 = 1.5 + 18.75
-    assert round(with_cache, 6) == round(1.5 + 18.75, 6)
+    # 1M reads @ 5*0.1 + 1M writes @ 5*1.25 = 0.5 + 6.25
+    assert round(with_cache, 6) == round(0.5 + 6.25, 6)
 
 
 def test_resolve_prefers_authoritative_when_present() -> None:
@@ -74,7 +74,7 @@ def test_resolve_estimates_when_authoritative_none() -> None:
         output_tokens=0,
         authoritative=None,
     )
-    assert cost == 15.0  # falls back to the estimate
+    assert cost == 5.0  # falls back to the estimate
 
 
 def test_resolve_authoritative_zero_falls_back_to_estimate() -> None:
@@ -88,7 +88,7 @@ def test_resolve_authoritative_zero_falls_back_to_estimate() -> None:
         output_tokens=0,
         authoritative=0.0,
     )
-    assert cost == 15.0  # estimated, not the reported zero
+    assert cost == 5.0  # estimated, not the reported zero
 
 
 def test_resolve_zero_tokens_zero_authoritative_is_zero() -> None:

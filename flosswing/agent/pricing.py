@@ -28,16 +28,23 @@ It now lives here once. Unlike the old copies, it accounts for cache tokens.
 
 from __future__ import annotations
 
-# Per-million-token USD rates (input, output). Placeholder rates; the
-# authoritative per-session figure comes from the SDK. Unknown models fall
-# back to the Opus rate so an estimate is never silently zero.
+# Per-million-token USD rates (input, output), at Anthropic's published list
+# price — which is also what Microsoft Foundry bills at. The authoritative
+# per-session figure still comes from the SDK; these only drive the in-flight
+# estimate. Unknown models fall back to the Opus rate so an estimate is never
+# silently zero.
 MODEL_RATES: dict[str, tuple[float, float]] = {
-    "claude-opus-4-7": (15.0, 75.0),
-    "claude-opus-4-8": (15.0, 75.0),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-opus-5": (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-haiku-4-5": (0.80, 4.00),
+    # Standard rate. Sonnet 5 carries promotional pricing of (2.0, 10.0)
+    # through 2026-08-31; this table has no date logic, so it prices at the
+    # rate that outlives the promotion.
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-haiku-4-5": (1.00, 5.00),
 }
-_DEFAULT_RATE: tuple[float, float] = (15.0, 75.0)
+_DEFAULT_RATE: tuple[float, float] = (5.0, 25.0)
 
 # Cache tokens are billed relative to the input rate: reads are cheap, writes
 # carry a premium. Multipliers follow Anthropic's published prompt-caching
