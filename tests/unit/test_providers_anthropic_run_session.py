@@ -27,7 +27,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
 from flosswing.agent.providers import anthropic_sdk
 from flosswing.agent.providers.base import UsageSnapshot
@@ -156,3 +156,109 @@ async def test_on_usage_none_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_query(monkeypatch, [_result(in_tok=1, out_tok=1, cost=0.0)])
     result = await _run(on_usage=None)
     assert result.outcome == "completed"
+
+
+# --- classifier refusals (real-time cyber safeguards) ----------------------
+#
+# When a safety classifier declines a request and no fallback model is
+# configured, the CLI emits a *synthetic* assistant turn carrying BOTH
+# stop_reason="refusal" AND error="invalid_request" — the latter because the
+# SDK's AssistantMessageError enum has no refusal member and buckets it into
+# the nearest category. Reported by Foundry-routed claude-opus-5 on the
+# Validate stage; verified against a captured message stream.
+
+
+_REFUSAL_TEXT = (
+    "API Error: Claude Code is unable to respond to this request, which "
+    "appears to violate our Usage Policy. This request triggered "
+    "restrictions on violative cyber content."
+)
+
+
+def _synthetic_refusal() -> AssistantMessage:
+    return AssistantMessage(
+        content=[TextBlock(text=_REFUSAL_TEXT)],
+        model="<synthetic>",
+        usage={"input_tokens": 0, "output_tokens": 0},
+        stop_reason="refusal",
+        error="invalid_request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_classifier_refusal_classifies_as_refused_not_errored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal must not be laundered into a generic API error.
+
+    ``_classify`` precedence is api_error > refusal (per the provider
+    abstraction spec), so a provider that reports the SDK's "invalid_request"
+    tag as api_error loses the refusal — which stages count separately and
+    CLAUDE.md tracks as a first-class failure mode.
+    """
+    _patch_query(monkeypatch, [_assistant(in_tok=500, out_tok=20), _synthetic_refusal()])
+    result = await _run()
+    assert result.outcome == "refused"
+    assert result.error_text is None
+
+
+@pytest.mark.asyncio
+async def test_classifier_refusal_captures_refusal_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The explanation lives in the synthetic turn's text block, not in
+    ResultMessage.result — capture it so the operator sees *why*."""
+    _patch_query(monkeypatch, [_synthetic_refusal()])
+    result = await _run()
+    assert result.refusal_text is not None
+    assert "violative cyber content" in result.refusal_text
+
+
+@pytest.mark.asyncio
+async def test_refusal_survives_a_later_successful_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production shape: the harness does NOT abort on a refused turn.
+
+    The captured stream continues past the refusal with further assistant
+    turns and terminates on a clean ``result``/``end_turn``. That overwrites
+    ``stop_reason``, so the refusal is only still visible if ``refusal_text``
+    is sticky — otherwise a session whose whole point was refused reports as
+    an ordinary success.
+    """
+    _patch_query(
+        monkeypatch,
+        [
+            _assistant(in_tok=500, out_tok=20),
+            _synthetic_refusal(),
+            _assistant(in_tok=1250, out_tok=200),
+            _result(in_tok=1250, out_tok=233, cost=0.14),
+        ],
+    )
+    result = await _run()
+    assert result.outcome == "refused"
+    assert result.refusal_text is not None
+    assert result.error_text is None
+    # Usage still comes from the terminal ResultMessage, not the synthetic
+    # zero-token refusal turn.
+    assert result.input_tokens == 1250
+
+
+@pytest.mark.asyncio
+async def test_non_refusal_assistant_error_still_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard: only a refusal-flagged turn takes the refusal path.
+    An assistant error without stop_reason="refusal" stays an api_error."""
+    msg = AssistantMessage(
+        content=[],
+        model="claude-opus-4-8",
+        usage={"input_tokens": 10, "output_tokens": 0},
+        stop_reason=None,
+        error="server_error",
+    )
+    _patch_query(monkeypatch, [msg])
+    result = await _run()
+    assert result.outcome == "errored"
+    assert result.error_text is not None
+    assert "server_error" in result.error_text
