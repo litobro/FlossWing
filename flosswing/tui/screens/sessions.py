@@ -67,7 +67,10 @@ class SessionsScreen(Screen[None]):
         table.clear()
         for r in sessions:
             note = ""
-            if r.outcome == "refused" and r.refusal_text:
+            # Not gated on outcome='refused': a session can recover from a
+            # refused turn and still finish, and that degradation is exactly
+            # what the operator needs to see on an otherwise-'completed' row.
+            if r.refusal_text:
                 note = f"refused: {r.refusal_text[:40]}"
             elif r.error_text:
                 note = f"error: {r.error_text[:40]}"

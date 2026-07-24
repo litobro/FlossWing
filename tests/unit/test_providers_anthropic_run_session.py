@@ -215,16 +215,17 @@ async def test_classifier_refusal_captures_refusal_text(
 
 
 @pytest.mark.asyncio
-async def test_refusal_survives_a_later_successful_result(
+async def test_recovered_refusal_completes_but_still_reports_the_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The production shape: the harness does NOT abort on a refused turn.
 
     The captured stream continues past the refusal with further assistant
-    turns and terminates on a clean ``result``/``end_turn``. That overwrites
-    ``stop_reason``, so the refusal is only still visible if ``refusal_text``
-    is sticky — otherwise a session whose whole point was refused reports as
-    an ordinary success.
+    turns and terminates on a clean ``result``/``end_turn``. The session is
+    therefore ``completed`` — it produced real work the stage must count —
+    but ``refusal_text`` stays populated so the operator can see the run was
+    degraded. Sticky text is what makes that possible: ``stop_reason`` has
+    been overwritten by the terminal message.
     """
     _patch_query(
         monkeypatch,
@@ -236,8 +237,9 @@ async def test_refusal_survives_a_later_successful_result(
         ],
     )
     result = await _run()
-    assert result.outcome == "refused"
+    assert result.outcome == "completed"
     assert result.refusal_text is not None
+    assert "violative cyber content" in result.refusal_text
     assert result.error_text is None
     # Usage still comes from the terminal ResultMessage, not the synthetic
     # zero-token refusal turn.
