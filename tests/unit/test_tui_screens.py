@@ -656,6 +656,109 @@ async def test_db_error_shows_guidance(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runs_screen_retries_transient_read_error(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a transient lock used to stop the poll timer permanently.
+
+    A scan holds long write transactions (IndexBuild keeps one open for the
+    whole stage), so a poll can lose the race. The timer must stay armed and
+    the last-known rows must stay on screen.
+    """
+    from textual.widgets import DataTable, Static
+
+    from flosswing.tui import data as tui_data
+    from flosswing.tui.screens.runs import RunsScreen
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, RunsScreen)
+        table = screen.query_one("#runs-table", DataTable)
+        assert table.row_count > 0
+
+        def boom() -> list[object]:
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(tui_data, "list_runs", boom)
+        screen.refresh_rows()
+
+        assert screen._poll is not None  # still armed for the next tick
+        assert table.row_count > 0  # rows retained, not strobed to empty
+        empty = screen.query_one("#runs-empty", Static)
+        assert "Retrying" in str(empty.content)
+
+
+@pytest.mark.asyncio
+async def test_runs_screen_recovers_when_db_readable_again(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the lock clears, the dashboard repopulates on the next tick."""
+    from textual.widgets import DataTable, Static
+
+    from flosswing.tui import data as tui_data
+    from flosswing.tui.screens.runs import RunsScreen
+
+    real_list_runs = tui_data.list_runs
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, RunsScreen)
+
+        def boom() -> list[object]:
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(tui_data, "list_runs", boom)
+        screen.refresh_rows()
+        screen.refresh_rows()
+        assert screen._read_failures == 2
+
+        monkeypatch.setattr(tui_data, "list_runs", real_list_runs)
+        screen.refresh_rows()
+
+        assert screen._read_failures == 0
+        assert screen._poll is not None
+        assert screen.query_one("#runs-table", DataTable).row_count > 0
+        empty = screen.query_one("#runs-empty", Static)
+        assert "Cannot read" not in str(empty.content)
+
+
+@pytest.mark.asyncio
+async def test_runs_screen_gives_up_after_persistent_failures(
+    seeded_db: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuinely unreadable DB still stops the poll and explains why —
+    the original behaviour, now reached only after repeated failures."""
+    from textual.widgets import Static
+
+    from flosswing.tui import data as tui_data
+    from flosswing.tui.screens.runs import (
+        _MAX_CONSECUTIVE_READ_FAILURES,
+        RunsScreen,
+    )
+
+    app = FlosswingTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, RunsScreen)
+
+        def boom() -> list[object]:
+            raise RuntimeError("no such table: runs")
+
+        monkeypatch.setattr(tui_data, "list_runs", boom)
+        for _ in range(_MAX_CONSECUTIVE_READ_FAILURES):
+            screen.refresh_rows()
+
+        assert screen._poll is None  # gave up
+        empty = screen.query_one("#runs-empty", Static)
+        assert "Stopped retrying" in str(empty.content)
+
+
+@pytest.mark.asyncio
 async def test_quit_guard_detach_exits(seeded_db: str) -> None:
     from unittest import mock
 
