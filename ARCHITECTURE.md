@@ -246,6 +246,8 @@ Deterministic. No agent. Reads the SQLite state and renders:
 - `report.md` — human-readable, findings grouped by severity and reachability
 - `report.json` — schema-validated structured output
 - `report.sarif` — for GitHub code scanning upload (optional, behind `--format sarif`)
+- `report.html` — self-contained triage view: findings ordered by validation
+  verdict and reachability rather than severity, opened directly from disk
 - `findings/<id>/` — one directory per CONFIRMED finding containing:
   - `finding.json`
   - `poc/` — PoC code as written by the Hunter, with run output
@@ -261,6 +263,14 @@ out manually.
 > placeholder JSON containing only a comment. Real SARIF 2.1.0
 > output, hand-rolled without an additional dependency, is targeted
 > for v1.1.
+
+> **`report.html` and the "no web UI" non-goal (operator decision,
+> 2026-07-25):** `report.html` is a static file rendered from the same state
+> as the other formats, not a service. The "no web UI" hard non-goal and the
+> v2 "local server mode" item both stand: FlossWing serves nothing, listens
+> on no port, and opens no browser. A file on disk that an operator chooses
+> to open is not a UI. See
+> `docs/specs/2026-07-25-html-report-design.md`.
 
 ## Symbol index
 
