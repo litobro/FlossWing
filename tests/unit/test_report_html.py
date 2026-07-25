@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from flosswing.stages import report_html
 from flosswing.stages.report import (
@@ -226,3 +229,26 @@ def test_render_html_survives_missing_validation_and_trace() -> None:
     assert f.title in json.loads(
         html.split("const REPORT = ", 1)[1].split(";\n", 1)[0].replace("\\u003c", "<")
     )["findings"][0]["title"]
+
+
+def test_render_writes_report_html(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--format html writes report.html and reports it as written."""
+    from flosswing.stages import report as report_stage
+
+    # Patch the loader so the test needs no database.
+    monkeypatch.setattr(
+        report_stage, "_load", lambda run_id, session_factory: _report([_finding()])
+    )
+    out = tmp_path / "out"
+    result = report_stage.render(
+        run_id="01RUN00000000000000000001",
+        session_factory=None,  # type: ignore[arg-type]  # unused once _load is patched
+        output_dir=out,
+        formats=["html"],
+    )
+
+    assert "html" in result.formats_written
+    written = (out / "report.html").read_text(encoding="utf-8")
+    assert written.startswith("<!doctype html>")

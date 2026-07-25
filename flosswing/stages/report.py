@@ -817,7 +817,7 @@ def _write_findings_dirs(
 # Public entry point
 
 
-_VALID_FORMATS: frozenset[str] = frozenset({"md", "json", "sarif"})
+_VALID_FORMATS: frozenset[str] = frozenset({"md", "json", "sarif", "html"})
 
 
 def render(
@@ -830,10 +830,10 @@ def render(
     """Render the v1.0 report for ``run_id`` into ``output_dir``.
 
     Deterministic given the state DB and ``_now_iso()``. Writes
-    ``report.md`` and/or ``report.json`` depending on ``formats``;
-    ``sarif`` is accepted but emits a stderr stub (tracked in v1.1, per
-    spec § SARIF stance). Per-finding directories are written regardless
-    of which formats were requested.
+    ``report.md``, ``report.json`` and/or ``report.html`` depending on
+    ``formats``; ``sarif`` is accepted but emits a stderr stub (tracked in
+    v1.1, per spec § SARIF stance). Per-finding directories are written
+    regardless of which formats were requested.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "findings").mkdir(parents=True, exist_ok=True)
@@ -857,6 +857,14 @@ def render(
             path.write_text(content, encoding="utf-8")
             bytes_written += path.stat().st_size
             formats_written.append("json")
+        elif fmt == "html":
+            from flosswing.stages.report_html import render_html
+
+            content = render_html(report)
+            path = output_dir / "report.html"
+            path.write_text(content, encoding="utf-8")
+            bytes_written += path.stat().st_size
+            formats_written.append("html")
         elif fmt == "sarif":
             # Per spec § SARIF stance: write a placeholder report.sarif
             # file containing exactly one `$comment` field, plus emit a
