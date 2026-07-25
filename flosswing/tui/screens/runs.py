@@ -37,6 +37,11 @@ from flosswing.tui.widgets import SelectableDataTable
 _LIVE_GLYPH = {"live": "●", "stale": "⚠", "unknown": "?", "done": "·"}
 _LIVE_STYLE = {"live": "green", "stale": "yellow", "unknown": "dim", "done": "dim"}
 
+# Consecutive failed state.db reads before the poll gives up. Distinguishes a
+# transient lock (retry) from a genuinely unreadable DB (stop and explain).
+# At POLL_INTERVAL_SECONDS=1.0 this is ~10s of retrying for an instant error.
+_MAX_CONSECUTIVE_READ_FAILURES = 10
+
 
 def _format_elapsed(started_at: str) -> str:
     """Humanised elapsed time since an ISO8601 timestamp, e.g. '3m12s'.
@@ -76,6 +81,7 @@ class RunsScreen(Screen[None]):
     def __init__(self) -> None:
         super().__init__()
         self._poll: Timer | None = None
+        self._read_failures = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -96,16 +102,35 @@ class RunsScreen(Screen[None]):
         table = self.query_one("#runs-table", DataTable)
         try:
             rows = data.list_runs()
-        except Exception as e:  # DB unreadable — show guidance, stop poll, never crash
+        except Exception as e:  # DB unreadable — show guidance, never crash
+            # A read failure here is usually TRANSIENT: a scan holds long write
+            # transactions (IndexBuild keeps one open for the whole stage), so a
+            # poll can legitimately lose the race. Retrying is what sessions.py
+            # already does. Keep the last-known rows on screen rather than
+            # clearing — clearing every tick would strobe the dashboard.
+            self._read_failures += 1
             empty = self.query_one("#runs-empty", Static)
             # Text(...) renders literally — the scrubbed error is untrusted and
             # may contain Rich-markup-like sequences.
-            empty.update(Text(f"Cannot read state.db: {errors.scrub(str(e))}"))
+            msg = f"Cannot read state.db: {errors.scrub(str(e))}"
+            if self._read_failures < _MAX_CONSECUTIVE_READ_FAILURES:
+                empty.update(Text(f"{msg}\n\nRetrying…"))
+                return
+            # Persistently unreadable (missing file, stale schema) — stop
+            # hammering it and tell the user how to get out of this state.
+            empty.update(
+                Text(
+                    f"{msg}\n\nStopped retrying after "
+                    f"{self._read_failures} attempts. Restart the TUI once any "
+                    "running scan has finished."
+                )
+            )
             table.clear()
             if self._poll is not None:
                 self._poll.stop()
                 self._poll = None
             return
+        self._read_failures = 0
         cursor = table.cursor_row
         table.clear()
         for r in rows:

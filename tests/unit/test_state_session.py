@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
 
+from flosswing.state import db as st_db
 from flosswing.state import session as st_session
 from flosswing.state.models import Run
 
@@ -16,6 +18,17 @@ def fresh_memory_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Force a fresh in-memory SQLite engine per test."""
     monkeypatch.setenv("FLOSSWING_DB_URL", "sqlite:///:memory:")
     # The module caches the engine; reset for the test.
+    st_session._cached_engine = None  # type: ignore[attr-defined]
+    st_session._cached_session_factory = None  # type: ignore[attr-defined]
+    yield
+    st_session._cached_engine = None  # type: ignore[attr-defined]
+    st_session._cached_session_factory = None  # type: ignore[attr-defined]
+
+
+@pytest.fixture()
+def fresh_file_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Force a fresh file-backed SQLite engine — WAL needs a real file."""
+    monkeypatch.setenv("FLOSSWING_DB_URL", f"sqlite:///{tmp_path / 'state.db'}")
     st_session._cached_engine = None  # type: ignore[attr-defined]
     st_session._cached_session_factory = None  # type: ignore[attr-defined]
     yield
@@ -41,6 +54,37 @@ def test_engine_enables_foreign_keys(fresh_memory_db: None) -> None:
     eng = st_session.engine()
     with eng.connect() as conn:
         assert conn.execute(text("PRAGMA foreign_keys")).scalar() == 1
+
+
+def test_engine_sets_busy_timeout(fresh_memory_db: None) -> None:
+    eng = st_session.engine()
+    with eng.connect() as conn:
+        got = conn.execute(text("PRAGMA busy_timeout")).scalar()
+    assert got == st_db.SQLITE_BUSY_TIMEOUT_MS
+
+
+def test_file_backed_engine_uses_wal(fresh_file_db: None) -> None:
+    eng = st_session.engine()
+    with eng.connect() as conn:
+        assert conn.execute(text("PRAGMA journal_mode")).scalar() == "wal"
+
+
+def test_reader_not_blocked_while_writer_holds_lock(fresh_file_db: None) -> None:
+    """Regression: the TUI polls state.db while a scan holds write locks.
+
+    Under the default rollback journal a writer's EXCLUSIVE lock blocks readers
+    outright, and with SQLite's default busy_timeout of 0 the reader fails
+    instantly with "database is locked" — which stopped the TUI's poll timer
+    for good. Under WAL the reader proceeds against its own snapshot.
+    """
+    eng = st_session.engine()
+    with eng.connect() as writer:
+        writer.execute(text("BEGIN EXCLUSIVE"))
+        try:
+            with eng.connect() as reader:
+                assert reader.execute(text("SELECT count(*) FROM runs")).scalar() == 0
+        finally:
+            writer.execute(text("ROLLBACK"))
 
 
 def test_session_scope_commits_on_success(fresh_memory_db: None) -> None:
