@@ -99,3 +99,42 @@ def test_payload_escapes_angle_bracket_so_it_cannot_close_the_script_block() -> 
     assert "<" not in payload
     # Still decodes back to the original text.
     assert json.loads(payload)["findings"][0]["title"] == "</script><img src=x onerror=alert(1)>"
+
+
+def test_render_html_is_pure_ascii() -> None:
+    html = report_html.render_html(_report([_finding(description="dash — here")]))
+    assert html.isascii()
+
+
+def test_render_html_references_no_external_resources() -> None:
+    """Must render fully offline from file://; no CDN, font, or remote image."""
+    html = report_html.render_html(_report([_finding()]))
+    assert "http://" not in html
+    assert "https://" not in html
+
+
+def test_render_html_does_not_let_repo_text_become_markup() -> None:
+    """The whole point: untrusted repo text must never reach live markup."""
+    payload = "</script><img src=x onerror=alert(1)>"
+    html = report_html.render_html(_report([_finding(title=payload, description=payload)]))
+    # Exactly one script element -- the payload did not open or close one.
+    assert html.count("<script") == 1
+    assert html.count("</script>") == 1
+    # The raw attack string never appears as markup anywhere in the document.
+    assert payload not in html
+
+
+def test_render_html_states_that_zero_findings_is_not_a_clean_bill() -> None:
+    """ARCHITECTURE.md threat model item 5 requires the report to say so."""
+    html = report_html.render_html(_report([]))
+    assert "not" in html.lower()
+    assert "secure" in html.lower()
+
+
+def test_render_html_survives_missing_validation_and_trace() -> None:
+    """Report may run before Validate/Trace land; must degrade, not raise."""
+    f = _finding(validation=None, trace=None, reachable=None)
+    html = report_html.render_html(_report([f]))
+    assert f.title in json.loads(
+        html.split("const REPORT = ", 1)[1].split(";\n", 1)[0].replace("\\u003c", "<")
+    )["findings"][0]["title"]
