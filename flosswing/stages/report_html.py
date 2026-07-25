@@ -42,7 +42,7 @@ from flosswing.stages.report import ReportFinding, ReportV1
 _STATUS_ORDER: dict[str, int] = {
     "confirmed": 0,
     "uncertain": 1,
-    "pending": 2,
+    "pending_validation": 2,
     "rejected": 3,
     "superseded": 4,
 }
@@ -182,7 +182,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 """
 
 _JS = """
-const STATUSES = ['confirmed','uncertain','pending','rejected','superseded'];
+const STATUSES = ['confirmed','uncertain','pending_validation','rejected','superseded'];
 const app = document.getElementById('app');
 
 function el(tag, cls, text) {
@@ -235,7 +235,12 @@ function findingRow(f, idx) {
   row.appendChild(main);
 
   const pills = el('span', 'pills');
-  pills.appendChild(el('span', 'pill s-' + f.status, f.status));
+  // f.status is a bare string with no character restrictions upstream; a
+  // crafted value containing whitespace would otherwise split into extra
+  // class tokens when concatenated raw into className, letting repo text
+  // toggle an unrelated existing class (e.g. one that hides the badge).
+  const statusCls = 'pill s-' + String(f.status).replace(/\\s+/g, '-');
+  pills.appendChild(el('span', statusCls, f.status));
   if (f.reachable) pills.appendChild(el('span', 'pill', 'reach: ' + f.reachable));
   pills.appendChild(el('span', 'pill', f.severity));
   pills.appendChild(el('span', 'pill', f.confidence));
@@ -268,6 +273,11 @@ function findingRow(f, idx) {
 
 function render() {
   const r = REPORT, s = r.summary;
+
+  // run.id is repo/run-derived and only ever flows through this escaped
+  // JSON payload; setting the DOM `title` property (not markup) is what
+  // keeps a hostile id from ever being parsed as HTML.
+  document.title = 'FlossWing report ' + r.run.id;
 
   app.appendChild(el('p', 'eyebrow', 'FlossWing scan report'));
   app.appendChild(el('h1', null, r.run.target_repo_path));
@@ -344,7 +354,7 @@ def render_html(report: ReportV1) -> str:
         "<head>\n"
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"<title>FlossWing report {report.run.id}</title>\n"
+        "<title>FlossWing report</title>\n"
         f"<style>{_CSS}</style>\n"
         "</head>\n"
         "<body>\n"

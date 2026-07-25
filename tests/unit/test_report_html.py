@@ -35,11 +35,13 @@ def _finding(**kw: object) -> ReportFinding:
     return ReportFinding(**base)  # type: ignore[arg-type]  # kwargs are dynamic by design
 
 
-def _report(findings: list[ReportFinding]) -> ReportV1:
+def _report(
+    findings: list[ReportFinding], *, run_id: str = "01RUN00000000000000000001"
+) -> ReportV1:
     return ReportV1(
         rendered_at="2026-07-25T00:00:00Z",
         run=ReportRun(
-            id="01RUN00000000000000000001",
+            id=run_id,
             target_repo_path="/tmp/repo",
             status="completed",
             started_at="2026-07-25T00:00:00Z",
@@ -76,6 +78,22 @@ def test_confirmed_sorts_ahead_of_rejected_regardless_of_severity() -> None:
     assert [f["id"] for f in payload["findings"]] == ["b", "a"]
 
 
+def test_pending_validation_sorts_between_uncertain_and_rejected() -> None:
+    """Regression: the real DB status value is 'pending_validation', not
+    'pending'. The wrong magic string used to miss ``_STATUS_ORDER``
+    entirely, falling through to the unknown-status default (99) -- which
+    sorted a pending_validation finding *after* superseded and also gave it
+    no filter chip in the JS (see STATUSES in _JS)."""
+    uncertain = _finding(id="a", status="uncertain", title="A")
+    pending = _finding(id="b", status="pending_validation", title="B")
+    rejected = _finding(id="c", status="rejected", title="C")
+    superseded = _finding(id="d", status="superseded", title="D")
+    payload = json.loads(
+        report_html._payload_json(_report([superseded, rejected, pending, uncertain]))
+    )
+    assert [f["id"] for f in payload["findings"]] == ["a", "b", "c", "d"]
+
+
 def test_reachable_sorts_ahead_of_unproven_within_same_status() -> None:
     unproven = _finding(id="a", status="confirmed", reachable="uncertain", title="A")
     reachable = _finding(id="b", status="confirmed", reachable="reachable", title="B")
@@ -107,10 +125,66 @@ def test_render_html_is_pure_ascii() -> None:
 
 
 def test_render_html_references_no_external_resources() -> None:
-    """Must render fully offline from file://; no CDN, font, or remote image."""
-    html = report_html.render_html(_report([_finding()]))
-    assert "http://" not in html
-    assert "https://" not in html
+    """Must render fully offline from file://; no CDN, font, or remote image.
+
+    Scoped to the parts that could actually load a resource -- the CSS, the
+    JS, and the HTML skeleton -- rather than the embedded JSON payload.
+    Finding descriptions are free text from an untrusted repo and routinely
+    cite https:// advisory links (expected content, not a resource load);
+    scanning the whole document would fail spuriously on the first such
+    fixture.
+    """
+    report = _report([_finding(description="See https://advisory.example/CVE-1 for details.")])
+    html = report_html.render_html(report)
+    payload = report_html._payload_json(report)
+    skeleton = html.replace(payload, "", 1)
+
+    assert "http://" not in report_html._CSS
+    assert "https://" not in report_html._CSS
+    assert "http://" not in report_html._JS
+    assert "https://" not in report_html._JS
+    assert "http://" not in skeleton
+    assert "https://" not in skeleton
+
+
+def test_render_html_title_does_not_embed_run_id_as_markup() -> None:
+    """`report.run.id` used to be concatenated straight into <title>, the only
+    field bypassing the escaped JSON payload. A hostile or non-ASCII id must
+    still only reach the page through that payload (and later `document.title`
+    in JS, a DOM property assignment, not markup) -- never break the "exactly
+    one <script>" or "pure ASCII" invariants."""
+    malicious_id = "</script><img src=x onerror=alert(1)>é"
+    html = report_html.render_html(_report([_finding()], run_id=malicious_id))
+    assert html.count("<script") == 1
+    assert html.count("</script>") == 1
+    assert html.isascii()
+
+
+def test_js_never_uses_markup_sinks_like_innerhtml() -> None:
+    """Coarse proxy for "all text reaches the DOM via textContent".
+
+    No JS engine is available in this test suite, so we cannot execute
+    ``_JS`` and observe that ``el()`` assigns ``n.textContent`` rather than
+    ``n.innerHTML`` -- a prior review swapped exactly that and all tests
+    still passed. Instead, grep the JS source for markup sinks that would
+    let repo-controlled text become live DOM instead of an inert string.
+    """
+    forbidden = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(")
+    for sink in forbidden:
+        assert sink not in report_html._JS
+
+
+def test_status_pill_class_collapses_whitespace() -> None:
+    """`ReportFinding.status` is a bare `str` with no character restrictions;
+    a crafted value containing whitespace (e.g. "confirmed hidden") would
+    otherwise split into extra class tokens when concatenated raw into
+    className, letting repo-controlled text toggle an unrelated existing
+    class (such as one that hides the badge). No JS engine is available, so
+    this checks the source builds the class name through a
+    whitespace-collapsing regex rather than raw concatenation with f.status.
+    """
+    assert "'pill s-' + String(f.status).replace(/\\s+/g, '-')" in report_html._JS
+    assert "'pill s-' + f.status" not in report_html._JS
 
 
 def test_render_html_does_not_let_repo_text_become_markup() -> None:
@@ -125,10 +199,20 @@ def test_render_html_does_not_let_repo_text_become_markup() -> None:
 
 
 def test_render_html_states_that_zero_findings_is_not_a_clean_bill() -> None:
-    """ARCHITECTURE.md threat model item 5 requires the report to say so."""
+    """ARCHITECTURE.md threat model item 5 requires the report to say so.
+
+    Asserts on text unique to the caveat sentence itself, not the unrelated
+    'PoC - not run against a live target' string that also lives in _JS (the
+    previous 'not' / 'secure' substring checks passed on that string alone,
+    unconditionally, whether or not the caveat was ever rendered). Also
+    asserts the caveat is actually wired into the render path -- that the
+    'caveat' class is passed to `el()` as the direct argument of an
+    `app.appendChild()` call -- so deleting that append still fails this
+    test instead of silently leaving dead code in _JS.
+    """
     html = report_html.render_html(_report([]))
-    assert "not" in html.lower()
-    assert "secure" in html.lower()
+    assert "not evidence that this repository is" in html
+    assert "app.appendChild(el('p', 'caveat'," in html
 
 
 def test_render_html_survives_missing_validation_and_trace() -> None:
