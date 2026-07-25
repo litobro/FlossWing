@@ -83,7 +83,8 @@ def test_pending_validation_sorts_between_uncertain_and_rejected() -> None:
     'pending'. The wrong magic string used to miss ``_STATUS_ORDER``
     entirely, falling through to the unknown-status default (99) -- which
     sorted a pending_validation finding *after* superseded and also gave it
-    no filter chip in the JS (see STATUSES in _JS)."""
+    no filter chip in the JS (see STATUSES in _JS). Test pins both Python
+    _STATUS_ORDER and JS STATUSES array against each other."""
     uncertain = _finding(id="a", status="uncertain", title="A")
     pending = _finding(id="b", status="pending_validation", title="B")
     rejected = _finding(id="c", status="rejected", title="C")
@@ -92,6 +93,9 @@ def test_pending_validation_sorts_between_uncertain_and_rejected() -> None:
         report_html._payload_json(_report([superseded, rejected, pending, uncertain]))
     )
     assert [f["id"] for f in payload["findings"]] == ["a", "b", "c", "d"]
+    # Pin JS STATUSES array against Python _STATUS_ORDER: reverting either
+    # without the other silently breaks filter chips in the rendered HTML.
+    assert all(f"'{s}'" in report_html._JS for s in report_html._STATUS_ORDER)
 
 
 def test_reachable_sorts_ahead_of_unproven_within_same_status() -> None:

@@ -161,7 +161,9 @@ text-transform:uppercase;padding:3px 7px;border-radius:2px;white-space:nowrap;
 background:var(--surface2);color:var(--text2);border:1px solid var(--line)}
 .pill.s-confirmed{color:var(--confirm);border-color:var(--confirm)}
 .pill.s-uncertain{color:var(--uncertain);border-color:var(--uncertain)}
+.pill.s-pending_validation{color:var(--uncertain);border-color:var(--uncertain)}
 .pill.s-rejected{color:var(--reject);border-color:var(--reject)}
+.pill.s-superseded{color:var(--reject);border-color:var(--reject)}
 .detail{display:none;border-top:1px solid var(--line);padding:0 14px 16px;
 flex-direction:column;gap:0}
 .f.open .detail{display:flex}
