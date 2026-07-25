@@ -18,9 +18,15 @@
 
 Per docs/specs/2026-07-25-html-report-design.md.
 
-The target repo is untrusted input, so finding text never reaches markup by
-concatenation. It is serialised into a JSON payload and assigned through
-``textContent`` in the browser, which cannot interpret markup.
+The target repo is untrusted input, so finding text is hardened against injection
+via two distinct mechanisms:
+
+1. The JSON payload is embedded as a raw ``const REPORT = <json>`` literal inside
+   a ``<script>`` element. A finding title containing ``</script>`` would close the
+   element early and turn the rest into live markup, so ``<`` is escaped to
+   ``\\u003c`` to prevent that.
+2. Individual finding fields are later written into DOM nodes via ``textContent``,
+   which cannot interpret markup.
 """
 
 from __future__ import annotations
@@ -80,8 +86,11 @@ def _payload_json(report: ReportV1) -> str:
       live markup. ``<`` only ever occurs inside JSON string values, never in
       JSON structure, so escaping it wholesale is safe and reverses on parse.
     """
-    data = report.model_dump(mode="json")
-    data["findings"] = [
+    # Sort findings once and serialize each exactly once, avoiding the overhead
+    # of an initial report.model_dump() that gets immediately discarded.
+    sorted_findings: list[dict[str, object]] = [
         f.model_dump(mode="json") for f in sorted(report.findings, key=_triage_sort_key)
     ]
+    data = report.model_dump(mode="json", exclude={"findings"})
+    data["findings"] = sorted_findings
     return json.dumps(data, ensure_ascii=True, sort_keys=True).replace("<", "\\u003c")
