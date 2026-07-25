@@ -176,9 +176,35 @@ def test_js_never_uses_markup_sinks_like_innerhtml() -> None:
     still passed. Instead, grep the JS source for markup sinks that would
     let repo-controlled text become live DOM instead of an inert string.
     """
-    forbidden = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(")
+    forbidden = (
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "Function(",
+        "setHTMLUnsafe",
+        "parseHTMLUnsafe",
+        "srcdoc",
+        "createContextualFragment",
+        "DOMParser",
+        "document.writeln",
+    )
     for sink in forbidden:
         assert sink not in report_html._JS
+
+
+def test_js_ends_with_the_render_call() -> None:
+    """Guards against shipping a permanently blank report.
+
+    No JS engine is available in this suite, so nothing here actually
+    executes ``_JS`` and notices the page never populates ``#app``.
+    Deleting the trailing ``render();`` call leaves every other test
+    green -- the JSON payload, the CSS, and the source text of ``_JS``
+    itself are all unchanged -- while the shipped page silently renders
+    blank. Pin the call itself so that failure mode has a test.
+    """
+    assert report_html._JS.rstrip().endswith("render();")
 
 
 def test_status_pill_class_collapses_whitespace() -> None:

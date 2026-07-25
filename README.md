@@ -137,6 +137,9 @@ automatically. Output lands in
   reachability.
 - `report.json` — `ReportV1` Pydantic projection with
   `schema_version: "1.0"`.
+- `report.html` — self-contained triage view, findings ordered by
+  validation verdict and reachability rather than severity; open it
+  directly from disk, no server required.
 - `findings/<id>/` — per-confirmed-finding directory containing
   `finding.md` (the bug write-up) and `poc.py` (the reproduction
   PoC, when one exists).
@@ -263,7 +266,7 @@ on file, attack class, and location (within a per-entry line tolerance).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--no-report` | (off) | Skip end-of-scan auto-render. |
-| `--format md,json,sarif` | `md,json` | Pick output formats. `sarif` writes a v1.1 placeholder file. |
+| `--format md,json,sarif,html` | `md,json,html` | Pick output formats. `sarif` writes a v1.1 placeholder file. |
 | `--output-dir DIR` | `~/.flosswing/runs/<run_id>/output/` | Override the output location. |
 | `--recon-token-budget INT` | 100 000 | Per-session input-token cap. Similar flags for `hunt`, `validate`, `gapfill`, `dedupe`, `trace`. |
 | `--trace-max-depth INT` | 8 | `find_callers` walk depth before Trace emits `uncertain`. |

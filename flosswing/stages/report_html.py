@@ -123,6 +123,7 @@ flex-direction:column;gap:2px}
 text-transform:uppercase;color:var(--text3)}
 .readout dd{margin:0;font-family:var(--mono);font-size:13px;
 font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+h1,.ftitle,.fmeta,.fmeta span,.stage p{overflow-wrap:anywhere}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
 .tile{background:var(--surface);border:1px solid var(--line);border-top-width:2px;
 border-radius:3px;padding:12px 14px;display:flex;flex-direction:column;gap:3px}
@@ -360,6 +361,12 @@ def render_html(report: ReportV1) -> str:
         f"<style>{_CSS}</style>\n"
         "</head>\n"
         "<body>\n"
+        "<noscript>"
+        "<p>This report renders its findings with JavaScript, which is "
+        "disabled or unavailable in this browser. Script-free alternatives "
+        "-- report.md and report.json -- are in the same output directory "
+        "as this file.</p>"
+        "</noscript>\n"
         '<main id="app"></main>\n'
         f"<script>const REPORT = {payload};\n{_JS}</script>\n"
         "</body>\n"

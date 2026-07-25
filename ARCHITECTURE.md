@@ -257,9 +257,9 @@ Deterministic. No agent. Reads the SQLite state and renders:
 All output goes to `~/.flosswing/runs/<run_id>/output/`. Operator copies what they want
 out manually.
 
-> **v1.0 scope note:** v1.0 ships `report.md`, `report.json`, and
-> per-finding directories. The `--format sarif` flag is accepted in
-> v1.0 (so existing CI configurations do not break) but emits a
+> **v1.0 scope note:** v1.0 ships `report.md`, `report.json`,
+> `report.html`, and per-finding directories. The `--format sarif` flag is
+> accepted in v1.0 (so existing CI configurations do not break) but emits a
 > placeholder JSON containing only a comment. Real SARIF 2.1.0
 > output, hand-rolled without an additional dependency, is targeted
 > for v1.1.
@@ -556,7 +556,9 @@ logged. See
 - Languages: C, C++, Rust, Go, Python, JavaScript/TypeScript, Java
 - Attack class library as listed under Recon above
 - Sandbox: Docker (primary), Firejail (fallback)
-- Output: markdown report, JSON report, per-finding directories
+- Output: markdown report, JSON report, self-contained HTML triage view,
+  per-finding directories (`--format sarif` is accepted but writes only a
+  placeholder stub; real SARIF is v1.1)
 - Eval: corpus-based scoring with `flosswing eval`
 - Model-provider abstraction (Anthropic Agent SDK is the only working backend; BYO `ANTHROPIC_API_KEY`)
 

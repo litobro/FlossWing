@@ -858,6 +858,11 @@ def render(
             bytes_written += path.stat().st_size
             formats_written.append("json")
         elif fmt == "html":
+            # Function-local, not stylistic: report_html.py imports ReportFinding
+            # and ReportV1 from this module. Hoisting this to module scope creates
+            # an import cycle -- report -> report_html -> report -- that raises
+            # "ImportError: cannot import name 'ReportFinding' from partially
+            # initialized module" at import time. Leave it here.
             from flosswing.stages.report_html import render_html
 
             content = render_html(report)

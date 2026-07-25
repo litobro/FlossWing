@@ -113,10 +113,13 @@ The page contains:
 
 `docs/specs/2026-06-02-v1.0-report-design.md` sketched the render entry point
 as `formats: frozenset[Literal["md", "json", "sarif"]]`, but the shipped code
-did not adopt that typing — `report.py:828` takes `formats: list[str]` and
-validates against the `_VALID_FORMATS` frozenset at module scope. Adding a
-format therefore changes **no function signature**: only the contents of
-`_VALID_FORMATS` and one branch in the format loop.
+did not adopt that typing — `report.py:828` takes `formats: list[str]` with no
+validation of its own. The real gate is `cli.py:_VALID_OUTPUT_FORMATS`, which
+the CLI checks before ever calling into `report.py`. `report.py` does define a
+same-named `_VALID_FORMATS` frozenset, but it is currently vestigial — nothing
+in the codebase consults it. Adding a format therefore changes **no function
+signature**: only the contents of `cli.py:_VALID_OUTPUT_FORMATS` and one
+branch in the format loop.
 
 Nothing in `docs/tool-contracts.md` is affected; that file governs
 agent-facing tools, and no agent tool is involved in Report at all (the stage

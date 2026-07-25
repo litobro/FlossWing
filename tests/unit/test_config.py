@@ -461,7 +461,7 @@ def test_resolve_uses_default_output_formats_when_not_passed(
         trace_token_budget=None,
         output_formats=None,
     )
-    assert cfg.output_formats == ["md", "json"]
+    assert cfg.output_formats == ["md", "json", "html"]
     assert cfg.output_formats == list(fcfg.DEFAULT_OUTPUT_FORMATS)
 
 
@@ -505,7 +505,7 @@ def test_resolve_output_formats_default_is_independent_per_call(
         gapfill_token_budget=None,
     )
     cfg_a.output_formats.append("sarif")
-    assert cfg_b.output_formats == ["md", "json"]
+    assert cfg_b.output_formats == ["md", "json", "html"]
 
 
 def test_resolve_uses_default_output_dir_when_not_passed(
