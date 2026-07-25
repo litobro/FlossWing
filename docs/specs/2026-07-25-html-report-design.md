@@ -109,13 +109,18 @@ The page contains:
   target is secure, and that coverage is limited to the attack classes Recon
   queued. Required by `ARCHITECTURE.md` § Threat model item 5.
 
-### Seam changes (internal — not the frozen agent-facing tool contracts)
+### Seam changes: none
 
-`docs/specs/2026-06-02-v1.0-report-design.md` types the render entry point as
-`formats: frozenset[Literal["md", "json", "sarif"]]`. That `Literal` gains
-`"html"`. This is an internal Python signature, not a frozen contract in
-`docs/tool-contracts.md`, which governs agent-facing tools only. No agent
-tool signature changes.
+`docs/specs/2026-06-02-v1.0-report-design.md` sketched the render entry point
+as `formats: frozenset[Literal["md", "json", "sarif"]]`, but the shipped code
+did not adopt that typing — `report.py:828` takes `formats: list[str]` and
+validates against the `_VALID_FORMATS` frozenset at module scope. Adding a
+format therefore changes **no function signature**: only the contents of
+`_VALID_FORMATS` and one branch in the format loop.
+
+Nothing in `docs/tool-contracts.md` is affected; that file governs
+agent-facing tools, and no agent tool is involved in Report at all (the stage
+is deterministic and agentless).
 
 ## Configuration / CLI
 
