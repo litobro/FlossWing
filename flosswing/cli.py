@@ -30,7 +30,7 @@ from flosswing import orchestrator
 from flosswing.errors import FlosswingError
 from flosswing.stages import report as report_stage
 
-_VALID_OUTPUT_FORMATS: frozenset[str] = frozenset({"md", "json", "sarif"})
+_VALID_OUTPUT_FORMATS: frozenset[str] = frozenset({"md", "json", "sarif", "html"})
 
 
 def _parse_formats(value: str) -> list[str]:
@@ -38,13 +38,13 @@ def _parse_formats(value: str) -> list[str]:
     parts = [p.strip() for p in value.split(",") if p.strip()]
     if not parts:
         raise click.BadParameter(
-            "must be a comma-separated subset of md, json, sarif (got empty)"
+            "must be a comma-separated subset of md, json, sarif, html (got empty)"
         )
     bad = [p for p in parts if p not in _VALID_OUTPUT_FORMATS]
     if bad:
         raise click.BadParameter(
             f"unknown format(s): {', '.join(bad)}. "
-            "Valid values: md, json, sarif."
+            "Valid values: md, json, sarif, html."
         )
     return parts
 
@@ -169,10 +169,10 @@ def main(env_file: str | None, no_env_file: bool) -> None:
     "--format",
     "format_",
     type=str,
-    default="md,json",
+    default="md,json,html",
     help=(
         "Comma-separated output formats for the report "
-        "(default md,json; valid: md, json, sarif)."
+        "(default md,json,html; valid: md, json, sarif, html)."
     ),
 )
 def scan(
@@ -221,10 +221,10 @@ def scan(
     "--format",
     "format_",
     type=str,
-    default="md,json",
+    default="md,json,html",
     help=(
         "Comma-separated output formats for the report "
-        "(default md,json; valid: md, json, sarif)."
+        "(default md,json,html; valid: md, json, sarif, html)."
     ),
 )
 @click.option(

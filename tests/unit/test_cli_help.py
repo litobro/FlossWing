@@ -100,8 +100,9 @@ def test_scan_help_lists_format_flag() -> None:
     result = CliRunner().invoke(main, ["scan", "--help"])
     assert result.exit_code == 0, result.output
     assert "--format" in result.output
-    # Default is md,json — must appear in the help text.
-    assert "md,json" in result.output
+    # Default is md,json,html — assert the full string so this test still
+    # fails if the default changes.
+    assert "md,json,html" in result.output
 
 
 def test_report_help_exits_zero_and_lists_options() -> None:
@@ -110,7 +111,7 @@ def test_report_help_exits_zero_and_lists_options() -> None:
     assert result.exit_code == 0, result.output
     assert "--format" in result.output
     assert "--output-dir" in result.output
-    assert "md,json" in result.output
+    assert "md,json,html" in result.output
 
 
 def test_report_subcommand_no_longer_prints_not_implemented_stub() -> None:
