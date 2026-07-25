@@ -83,13 +83,38 @@ NAMING_CONVENTION: dict[str, str | Callable[[CheckConstraint, Table], str]] = {
 metadata: MetaData = MetaData(naming_convention=NAMING_CONVENTION)  # type: ignore[arg-type]  # SQLAlchemy stubs type naming_convention as Mapping[str, str]; custom token callables are supported at runtime
 
 
+# How long a blocked connection waits for a lock before raising
+# "database is locked". SQLite's default is 0 — fail immediately — which is
+# wrong for us: a scan holds write transactions while the TUI polls to render
+# the dashboard.
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
+
 # SQLite ships with FK enforcement off by default; we require it on for every
-# connection (Alembic, app, tests). Non-SQLite drivers without a `cursor()` would
-# error here, but FlossWing only targets SQLite.
+# connection (Alembic, app, tests). The same hook sets the concurrency pragmas,
+# since a scan writes continuously while readers (the TUI, `flosswing report`)
+# poll the same file:
+#
+#   journal_mode=WAL  — the default rollback journal takes an EXCLUSIVE lock for
+#                       the duration of a write, which blocks readers outright.
+#                       Under WAL a reader and the writer proceed concurrently.
+#                       Persists on the file once set, so this is effectively a
+#                       one-time migration applied on first connect. It is a
+#                       documented no-op on :memory: DBs (they report "memory"),
+#                       which is why it is applied unconditionally rather than
+#                       paying for a `PRAGMA database_list` probe per connect.
+#   busy_timeout      — WAL still serialises writer-vs-writer, so a caller can
+#                       legitimately meet a held lock. Wait and retry instead of
+#                       failing instantly.
+#
+# Non-SQLite drivers without a `cursor()` would error here, but FlossWing only
+# targets SQLite.
 @event.listens_for(Engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection: Any, connection_record: Any) -> None:
+def _configure_sqlite_connection(dbapi_connection: Any, connection_record: Any) -> None:
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     finally:
         cursor.close()
