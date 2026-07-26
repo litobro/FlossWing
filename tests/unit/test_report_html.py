@@ -170,11 +170,18 @@ def test_render_html_title_does_not_embed_run_id_as_markup() -> None:
 def test_js_never_uses_markup_sinks_like_innerhtml() -> None:
     """Coarse proxy for "all text reaches the DOM via textContent".
 
-    No JS engine is available in this test suite, so we cannot execute
-    ``_JS`` and observe that ``el()`` assigns ``n.textContent`` rather than
-    ``n.innerHTML`` -- a prior review swapped exactly that and all tests
-    still passed. Instead, grep the JS source for markup sinks that would
-    let repo-controlled text become live DOM instead of an inert string.
+    This is a cheap fast-fail that works without node: grep the JS source
+    for markup sinks that would let repo-controlled text become live DOM
+    instead of an inert string. It is necessarily a blocklist, so it can
+    only catch sink names someone thought to enumerate here -- it already
+    missed ``setHTMLUnsafe`` once (a prior review swapped exactly that in
+    for ``n.textContent`` and every test, including this one, stayed green).
+
+    The real guarantee now lives in ``test_report_html_js.py``, which
+    actually executes ``_JS`` under node against a deny-by-default DOM shim
+    that throws on any sink outside its safe allowlist -- catching
+    unenumerated sinks too, not just ones named below. Keep this test as
+    well: it runs everywhere (no node required) and fails fast.
     """
     forbidden = (
         "innerHTML",
