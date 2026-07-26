@@ -68,7 +68,7 @@ DEFAULT_DEDUPE_TOKEN_BUDGET: int = 50_000
 DEFAULT_TRACE_TOKEN_BUDGET: int = 50_000
 DEFAULT_TRACE_MAX_DEPTH: int = 8
 DEFAULT_AUTO_RENDER: bool = True
-DEFAULT_OUTPUT_FORMATS: tuple[str, ...] = ("md", "json")
+DEFAULT_OUTPUT_FORMATS: tuple[str, ...] = ("md", "json", "html")
 DEFAULT_OUTPUT_DIR: Path | None = None
 
 DEFAULT_PROVIDER: str = "anthropic"

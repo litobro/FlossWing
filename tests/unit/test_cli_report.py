@@ -277,3 +277,23 @@ def test_report_subcommand_sarif_writes_placeholder_file(
     assert '"$comment"' in sarif_text
     assert "not yet implemented" in sarif_text
     assert "v1.1" in sarif_text
+
+
+def test_report_subcommand_format_html_accepted_and_written(
+    isolated_db: Path, tmp_path: Path,
+) -> None:
+    """``--format html`` must be accepted by cli.py's own format validation
+    (``_VALID_OUTPUT_FORMATS``) -- not just ``report.py``'s ``_VALID_FORMATS``
+    -- and must write ``report.html``. Regression test for the Task 4 gap:
+    the CLI has its own gate that rejected "html" before this task."""
+    run_id = str(ULID())
+    _seed_simple_run_with_one_finding(run_id)
+
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["report", "--format", "html", "--output-dir", str(out_dir), run_id],
+    )
+    assert result.exit_code == 0, (result.output, result.stderr)
+    assert (out_dir / "report.html").exists()

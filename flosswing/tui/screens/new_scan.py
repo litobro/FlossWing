@@ -30,7 +30,7 @@ from textual.widgets import Button, Input, Label, Static
 from flosswing.tui import launcher
 from flosswing.tui.launcher import ChildProcess
 
-_FORMATS: list[str] = ["md", "json", "sarif"]
+_FORMATS: list[str] = ["md", "json", "sarif", "html"]
 
 
 class NewScanScreen(ModalScreen[None]):
@@ -45,7 +45,9 @@ class NewScanScreen(ModalScreen[None]):
         with Vertical(id="new-scan-box"):
             yield Label("New scan")
             yield Input(value=str(Path.cwd()), placeholder="repo path", id="scan-path")
-            yield Input(value="md,json", placeholder="formats (comma sep)", id="scan-formats")
+            yield Input(
+                value="md,json,html", placeholder="formats (comma sep)", id="scan-formats"
+            )
             yield Input(placeholder="hunt token budget (optional)", id="scan-budget")
             yield Static("", id="scan-error", markup=False)
             with Horizontal():
