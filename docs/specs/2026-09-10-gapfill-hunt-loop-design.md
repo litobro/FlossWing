@@ -49,14 +49,18 @@ Dedupe blocks move down to after Hunt(2). Gapfill's tool scope includes
 `query_run_state`, `query_findings`, `read_file`/`grep`/`list_dir`, and
 `add_hunt_task`; it does not need Validate/Dedupe output to run.
 
-**Verdict-visibility tradeoff (operator-accepted 2026-09-10):** because
+**Downstream-visibility tradeoff (verdicts + dedup, operator-accepted 2026-09-10):** because
 Gapfill now runs before Validate, findings are still `pending_validation`
 when Gapfill inspects them via `query_findings`, so it can no longer judge
 under-representation by validation verdict — only by severity (Hunter-set at
 record time) and finding presence/count. The operator accepted this partial
 degradation in exchange for the single-Validate-pass design; the Gapfill
 system prompt (`prompts/system/gapfill.md`) is updated to direct the agent to
-severity and presence rather than verdict.
+severity and presence rather than verdict. The same ordering also places
+Gapfill before Dedupe, so the findings it sees are not deduplicated;
+near-duplicate findings can inflate an attack class's apparent coverage, so
+the prompt directs the agent to weight distinct code locations over raw
+finding counts.
 
 ### Hunt(2) gate
 

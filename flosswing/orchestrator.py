@@ -582,6 +582,10 @@ async def run_scan(cfg: Config) -> ScanResult:
                 f"    refused:            {hunt2_result.tasks_refused}",
                 f"    budget_exceeded:    {hunt2_result.tasks_budget_exceeded}",
                 f"    errored:            {hunt2_result.tasks_errored}",
+                # Pass-2 delta: findings_total is run-wide cumulative, so
+                # subtract pass 1 to show what THIS pass recorded.
+                f"    findings recorded:  "
+                f"{hunt2_result.findings_total - hunt1_result.findings_total}",
                 f"    tokens in/out:      "
                 f"{hunt2_result.input_tokens_total} / "
                 f"{hunt2_result.output_tokens_total}",

@@ -47,7 +47,10 @@ best-effort second Hunt pass over them later in this same run.
   **before** Validate, so every finding here is still
   `status='pending_validation'` — final verdicts (confirmed / rejected
   / uncertain) are not yet assigned. Judge by severity and finding
-  presence, not verdict.
+  presence, not verdict. Gapfill also runs **before** Dedupe, so these
+  findings are **not deduplicated** — several near-duplicate findings for
+  one root cause can inflate an attack class's apparent coverage. Weight
+  distinct code locations over raw finding counts.
 - **`query_run_state()`** — read aggregate run state: the recorded
   Recon architecture (languages, build_commands, entry_points,
   trust_boundaries, subsystems, notes), the list of hunt_tasks with

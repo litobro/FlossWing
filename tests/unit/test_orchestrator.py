@@ -1158,11 +1158,11 @@ def test_hunt2_runs_when_gapfill_queues_tasks(
     async def fake_hunt(**kwargs: object) -> HuntStageResult:
         nonlocal hunt_calls
         hunt_calls += 1
-        # Pass 1: 1 finding. Pass 2: findings_total is run-wide, so it
-        # reports the cumulative 2. Mirror that here.
+        # Pass 1 records 2 findings. Pass 2's findings_total is run-wide
+        # cumulative (5), so the summary's pass-2 delta is 5 - 2 = 3.
         if hunt_calls == 1:
-            return _hunt(processed=2, succeeded=2, findings=1)
-        return _hunt(processed=1, succeeded=1, findings=2)
+            return _hunt(processed=2, succeeded=2, findings=2)
+        return _hunt(processed=1, succeeded=1, findings=5)
 
     async def fake_validate(**kwargs: object) -> ValidateStageResult:
         nonlocal validate_called
@@ -1181,6 +1181,8 @@ def test_hunt2_runs_when_gapfill_queues_tasks(
     assert hunt_calls == 2
     assert validate_called is True
     assert result.exit_code == 0
+    # Hunt(2) summary section reports its own pass-2 finding delta (5 - 2 = 3).
+    assert "findings recorded:  3" in result.summary
     with st_session.session_scope() as s:
         assert s.query(Run).all()[0].status == "completed"
 
