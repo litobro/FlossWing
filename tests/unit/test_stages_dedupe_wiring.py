@@ -736,7 +736,7 @@ def test_budget_used_sums_dedupe_tokens(
     async def fake_gapfill(**kwargs: object) -> GapfillStageResult:
         return GapfillStageResult(
             outcome="completed",
-            tasks_queued=1,
+            tasks_queued=0,
             cap=1,
             input_tokens=300,
             output_tokens=80,

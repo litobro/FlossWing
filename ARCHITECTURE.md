@@ -180,13 +180,15 @@ under-represented relative to the architecture.
 Outputs new Hunt tasks (capped at 20% of original budget). These re-enter the Hunt
 queue. Gapfill runs **once** per run; no recursive expansion in v1.
 
-Tool allowlist: `query_run_state` (read-only over the SQLite state), `add_hunt_task`.
+Tool allowlist: `read_file`, `list_dir`, `grep`, `query_findings`, `query_run_state` (read-only over the SQLite state), `add_hunt_task`.
 
-> **v0.7 scope note (pending implementation):** The first Gapfill plumbing
-> milestone queues new Hunt tasks but does **not** auto-trigger a second Hunt
-> pass against them within the same run. Newly queued tasks sit in
-> `status='pending'` for the operator's next invocation; auto-re-pass is a
-> follow-on milestone. See `docs/specs/2026-06-02-v0.7-gapfill-design.md`.
+> **v0.7 scope note:** Gapfill queues new Hunt tasks; the orchestrator then
+> runs one bounded second Hunt pass over them within the same run (the
+> Gapfill→Hunt arrow in the pipeline diagram). The second pass is best-effort
+> — its failures never mark the run `errored` — and there is no further
+> expansion: exactly one Gapfill and one second Hunt pass per run. See
+> `docs/specs/2026-06-02-v0.7-gapfill-design.md` and
+> `docs/specs/2026-09-10-gapfill-hunt-loop-design.md`.
 
 ### Stage 5: Dedupe — **v1**
 

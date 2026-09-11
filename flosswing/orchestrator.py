@@ -187,20 +187,54 @@ async def run_scan(cfg: Config) -> ScanResult:
                 recon_ok = False  # short-circuit Hunt below
 
         if recon_ok:
-            hunt_result = await hunt_stage.run(
+            hunt1_result = await hunt_stage.run(
                 run_id=run_id,
                 repo=cfg.repo_root,
                 cfg=cfg,
                 session_factory=st_session.session_factory(),
             )
         else:
-            hunt_result = hunt_stage.HuntStageResult.skipped()
+            hunt1_result = hunt_stage.HuntStageResult.skipped()
 
-        # v0.6: Validate runs after Hunt when Hunt produced >=1 finding.
-        # Per docs/specs/2026-06-02-v0.6-validate-design.md § orchestrator
-        # extension. Plan-time decision #6: Validate runs even if Hunt had
-        # partial failures, as long as >=1 finding landed.
-        if recon_ok and hunt_result.findings_total >= 1:
+        # Gapfill runs right after the first Hunt pass (moved ahead of
+        # Validate/Dedupe per docs/specs/2026-09-10-gapfill-hunt-loop-design.md
+        # § Stage reordering). Gate unchanged: Hunt succeeded >=1 task.
+        if recon_ok and hunt1_result.tasks_succeeded >= 1:
+            gapfill_result = await gapfill_stage.run(
+                run_id=run_id,
+                repo=cfg.repo_root,
+                cfg=cfg,
+                session_factory=st_session.session_factory(),
+            )
+        else:
+            gapfill_result = gapfill_stage.GapfillStageResult.skipped()
+
+        # Second (Gapfill-driven) Hunt pass. Runs only when Gapfill queued
+        # >=1 task. hunt_stage.run re-selects status='pending', which after
+        # pass 1 is exactly the Gapfill-queued tasks. Best-effort for the
+        # run's STATUS: task-level failures here never flip the run to
+        # errored (finalization reads hunt1). Its token usage does still
+        # count toward budget_used and the summary totals below.
+        hunt2_ran = recon_ok and gapfill_result.tasks_queued >= 1
+        if hunt2_ran:
+            hunt2_result = await hunt_stage.run(
+                run_id=run_id,
+                repo=cfg.repo_root,
+                cfg=cfg,
+                session_factory=st_session.session_factory(),
+            )
+        else:
+            hunt2_result = hunt_stage.HuntStageResult.skipped()
+
+        # Authoritative run-wide finding count. HuntStageResult.findings_total
+        # is a COUNT over all findings for the run, so hunt2_result already
+        # includes pass-1 findings when it ran.
+        combined_findings_total = (
+            hunt2_result.findings_total if hunt2_ran else hunt1_result.findings_total
+        )
+
+        # Validate runs after BOTH Hunt passes, over the union of findings.
+        if recon_ok and combined_findings_total >= 1:
             validate_result = await validate_stage.run(
                 run_id=run_id,
                 repo=cfg.repo_root,
@@ -210,17 +244,8 @@ async def run_scan(cfg: Config) -> ScanResult:
         else:
             validate_result = validate_stage.ValidateStageResult.skipped()
 
-        # v0.8: Dedupe runs after Validate when Hunt produced >=1 finding.
-        # Per docs/specs/2026-06-02-v0.8-dedupe-design.md § orchestrator.run_scan
-        # extension: "Dedupe runs only when >= 1 finding exists to consider"
-        # AND "The orchestrator runs Dedupe regardless of Validate's outcome
-        # (Dedupe doesn't require any `confirmed` verdicts to be useful)".
-        # The spec's pseudocode references `validate_result.outcome != "fatal"`,
-        # but ValidateStageResult has no `outcome` field; the canonical
-        # "did Validate produce usable state" predicate is satisfied whenever
-        # Validate did not raise (a raise would have already propagated past
-        # this point), so we gate purely on findings_total > 0 here.
-        if recon_ok and hunt_result.findings_total > 0:
+        # Dedupe runs after Validate over the union of findings.
+        if recon_ok and combined_findings_total > 0:
             dedupe_result = await dedupe_stage.run(
                 run_id=run_id,
                 repo=cfg.repo_root,
@@ -229,21 +254,6 @@ async def run_scan(cfg: Config) -> ScanResult:
             )
         else:
             dedupe_result = DedupeStageResult.skipped()
-
-        # v0.7: Gapfill runs after Validate when Hunt succeeded at least
-        # one task — regardless of findings_total. Per design decision #5
-        # of docs/specs/2026-06-02-v0.7-gapfill-design.md: zero-finding
-        # runs are when Gapfill is most useful, so the gate is
-        # tasks_succeeded >= 1 (not findings_total >= 1).
-        if recon_ok and hunt_result.tasks_succeeded >= 1:
-            gapfill_result = await gapfill_stage.run(
-                run_id=run_id,
-                repo=cfg.repo_root,
-                cfg=cfg,
-                session_factory=st_session.session_factory(),
-            )
-        else:
-            gapfill_result = gapfill_stage.GapfillStageResult.skipped()
 
         # v0.9: Trace runs after Dedupe over confirmed primaries (status =
         # 'confirmed' AND (dedupe_role IS NULL OR dedupe_role='primary')).
@@ -281,18 +291,20 @@ async def run_scan(cfg: Config) -> ScanResult:
         #   recon failed                                        -> errored, exit 1
         #   recon completed, 0 tasks queued                     -> errored, exit 1
         #   IndexBuild empty (symbols==0)                       -> errored, exit 1
-        #   hunt processed >=1 AND zero succeeded               -> errored, exit 1
-        #   hunt produced 0 findings                            -> completed (skip Validate)
-        #   hunt findings >=1 AND >=1 terminal Validate verdict -> completed, exit 0
-        #   hunt findings >=1 AND every Validate non-terminal   -> errored, exit 1
+        #   hunt1 processed >=1 AND zero succeeded              -> errored, exit 1
+        #   combined findings == 0                              -> completed (skip Validate)
+        #   combined findings >=1 AND >=1 terminal Validate verdict -> completed, exit 0
+        #   combined findings >=1 AND every Validate non-terminal   -> errored, exit 1
+        #   ('hunt1' = first pass only; the best-effort second pass never
+        #    gates status. 'combined' = combined_findings_total, both passes.)
         if not recon_ok:
             final_status = "errored"
-        elif hunt_result.tasks_succeeded < 1:
+        elif hunt1_result.tasks_succeeded < 1:
             # Kept separate from `not recon_ok` for the spec's
             # "hunt processed >=1 AND zero succeeded" branch to remain
             # legible alongside Validate's terminal-verdict check below.
             final_status = "errored"
-        elif hunt_result.findings_total == 0:
+        elif combined_findings_total == 0:
             # No findings -> Validate was skipped -> the run did its job.
             final_status = "completed"
         elif (
@@ -326,8 +338,10 @@ async def run_scan(cfg: Config) -> ScanResult:
             row.budget_used = (
                 recon_result.input_tokens
                 + recon_result.output_tokens
-                + hunt_result.input_tokens_total
-                + hunt_result.output_tokens_total
+                + hunt1_result.input_tokens_total
+                + hunt1_result.output_tokens_total
+                + hunt2_result.input_tokens_total
+                + hunt2_result.output_tokens_total
                 + validate_result.input_tokens_total
                 + validate_result.output_tokens_total
                 + gapfill_result.input_tokens
@@ -420,7 +434,8 @@ async def run_scan(cfg: Config) -> ScanResult:
 
         total_in_tokens = (
             recon_result.input_tokens
-            + hunt_result.input_tokens_total
+            + hunt1_result.input_tokens_total
+            + hunt2_result.input_tokens_total
             + validate_result.input_tokens_total
             + gapfill_result.input_tokens
             + dedupe_result.input_tokens
@@ -428,7 +443,8 @@ async def run_scan(cfg: Config) -> ScanResult:
         )
         total_out_tokens = (
             recon_result.output_tokens
-            + hunt_result.output_tokens_total
+            + hunt1_result.output_tokens_total
+            + hunt2_result.output_tokens_total
             + validate_result.output_tokens_total
             + gapfill_result.output_tokens
             + dedupe_result.output_tokens
@@ -558,6 +574,25 @@ async def run_scan(cfg: Config) -> ScanResult:
                 "--recursive` to include them"
             )
 
+        if hunt2_ran:
+            hunt2_lines: list[str] = [
+                "  hunt (gapfill pass):",
+                f"    tasks processed:    {hunt2_result.tasks_processed}",
+                f"    succeeded:          {hunt2_result.tasks_succeeded}",
+                f"    refused:            {hunt2_result.tasks_refused}",
+                f"    budget_exceeded:    {hunt2_result.tasks_budget_exceeded}",
+                f"    errored:            {hunt2_result.tasks_errored}",
+                # Pass-2 delta: findings_total is run-wide cumulative, so
+                # subtract pass 1 to show what THIS pass recorded.
+                f"    findings recorded:  "
+                f"{hunt2_result.findings_total - hunt1_result.findings_total}",
+                f"    tokens in/out:      "
+                f"{hunt2_result.input_tokens_total} / "
+                f"{hunt2_result.output_tokens_total}",
+            ]
+        else:
+            hunt2_lines = ["  hunt (gapfill pass): skipped (gapfill queued no tasks)"]
+
         summary_lines = [
             f"Run {run_id} {final_status}.",
             _model_line,
@@ -577,15 +612,16 @@ async def run_scan(cfg: Config) -> ScanResult:
             f"    duration_ms:       {index_result.duration_ms if index_result else 0}",
             *_index_extra_lines,
             "  hunt:",
-            f"    tasks processed:    {hunt_result.tasks_processed}",
-            f"    succeeded:          {hunt_result.tasks_succeeded}",
-            f"    refused:            {hunt_result.tasks_refused}",
-            f"    budget_exceeded:    {hunt_result.tasks_budget_exceeded}",
-            f"    errored:            {hunt_result.tasks_errored}",
-            f"    findings recorded:  {hunt_result.findings_total}",
+            f"    tasks processed:    {hunt1_result.tasks_processed}",
+            f"    succeeded:          {hunt1_result.tasks_succeeded}",
+            f"    refused:            {hunt1_result.tasks_refused}",
+            f"    budget_exceeded:    {hunt1_result.tasks_budget_exceeded}",
+            f"    errored:            {hunt1_result.tasks_errored}",
+            f"    findings recorded:  {hunt1_result.findings_total}",
             f"    tokens in/out:      "
-            f"{hunt_result.input_tokens_total} / {hunt_result.output_tokens_total}",
+            f"{hunt1_result.input_tokens_total} / {hunt1_result.output_tokens_total}",
             *task_lines,
+            *hunt2_lines,
             "  validate:",
             f"    findings processed: {validate_result.findings_processed}",
             f"    confirmed:          {validate_result.findings_confirmed}",
