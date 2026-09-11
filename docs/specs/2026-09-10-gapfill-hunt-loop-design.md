@@ -45,10 +45,18 @@ Recon → Index → Hunt(1) → Gapfill → Hunt(2) → Validate → Dedupe → 
 ```
 
 The Gapfill block moves up to immediately after Hunt(1); the Validate and
-Dedupe blocks move down to after Hunt(2). Gapfill only reads the Recon
-artifact and the Hunt task log (tool scope: `query_run_state`,
-`add_hunt_task`), so it does not depend on Validate/Dedupe output and is safe
-to run earlier.
+Dedupe blocks move down to after Hunt(2). Gapfill's tool scope includes
+`query_run_state`, `query_findings`, `read_file`/`grep`/`list_dir`, and
+`add_hunt_task`; it does not need Validate/Dedupe output to run.
+
+**Verdict-visibility tradeoff (operator-accepted 2026-09-10):** because
+Gapfill now runs before Validate, findings are still `pending_validation`
+when Gapfill inspects them via `query_findings`, so it can no longer judge
+under-representation by validation verdict — only by severity (Hunter-set at
+record time) and finding presence/count. The operator accepted this partial
+degradation in exchange for the single-Validate-pass design; the Gapfill
+system prompt (`prompts/system/gapfill.md`) is updated to direct the agent to
+severity and presence rather than verdict.
 
 ### Hunt(2) gate
 

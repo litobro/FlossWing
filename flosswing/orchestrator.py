@@ -211,8 +211,10 @@ async def run_scan(cfg: Config) -> ScanResult:
 
         # Second (Gapfill-driven) Hunt pass. Runs only when Gapfill queued
         # >=1 task. hunt_stage.run re-selects status='pending', which after
-        # pass 1 is exactly the Gapfill-queued tasks. Best-effort: failures
-        # here never flip the run to errored (finalization reads hunt1).
+        # pass 1 is exactly the Gapfill-queued tasks. Best-effort for the
+        # run's STATUS: task-level failures here never flip the run to
+        # errored (finalization reads hunt1). Its token usage does still
+        # count toward budget_used and the summary totals below.
         hunt2_ran = recon_ok and gapfill_result.tasks_queued >= 1
         if hunt2_ran:
             hunt2_result = await hunt_stage.run(
@@ -289,10 +291,12 @@ async def run_scan(cfg: Config) -> ScanResult:
         #   recon failed                                        -> errored, exit 1
         #   recon completed, 0 tasks queued                     -> errored, exit 1
         #   IndexBuild empty (symbols==0)                       -> errored, exit 1
-        #   hunt processed >=1 AND zero succeeded               -> errored, exit 1
-        #   hunt produced 0 findings                            -> completed (skip Validate)
-        #   hunt findings >=1 AND >=1 terminal Validate verdict -> completed, exit 0
-        #   hunt findings >=1 AND every Validate non-terminal   -> errored, exit 1
+        #   hunt1 processed >=1 AND zero succeeded              -> errored, exit 1
+        #   combined findings == 0                              -> completed (skip Validate)
+        #   combined findings >=1 AND >=1 terminal Validate verdict -> completed, exit 0
+        #   combined findings >=1 AND every Validate non-terminal   -> errored, exit 1
+        #   ('hunt1' = first pass only; the best-effort second pass never
+        #    gates status. 'combined' = combined_findings_total, both passes.)
         if not recon_ok:
             final_status = "errored"
         elif hunt1_result.tasks_succeeded < 1:
