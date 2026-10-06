@@ -57,6 +57,12 @@ Real vulnerabilities discovered with FlossWing and disclosed responsibly:
   parameter-passing bug in the capture report endpoint let an attacker reach
   admin-level functionality, enabling a denial-of-service against an integrated
   MISP instance via unintended search queries. Patched in 1.39.4.
+- **[GHSA-vh5m-fc9v-m84g](https://github.com/dani-garcia/vaultwarden/security/advisories/GHSA-vh5m-fc9v-m84g)**
+  vaultwarden ≤ 1.36.0. SSRF filter bypass (regex not applied post-resolution).
+  An unauthenticated attacker can reach a regex blocked internal IP by supplying
+  a hostname that resolves to that IP but does not textually match the regex, via
+  unauthenticated `/icons/<host>/icon.png` endpoint.
+  
 
 **Found something with FlossWing?** If a scan led you to a real vulnerability
 that was assigned a CVE (or GHSA), we'd love to list it here — please open a PR
