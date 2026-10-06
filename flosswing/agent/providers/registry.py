@@ -22,9 +22,10 @@ from typing import Any
 
 from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
 from flosswing.agent.providers.base import Provider, SessionResult
+from flosswing.agent.providers.openai_codex import OpenAICodexProvider
 from flosswing.errors import ProviderNotImplementedError, UnknownProviderError
 
-_STUB_NAMES: tuple[str, ...] = ("ollama", "openai", "bedrock", "cloudflare")
+_STUB_NAMES: tuple[str, ...] = ("ollama", "bedrock", "cloudflare")
 
 
 class UnimplementedProvider:
@@ -47,7 +48,10 @@ class UnimplementedProvider:
         )
 
 
-_IMPLEMENTED: dict[str, Provider] = {"anthropic": AnthropicSDKProvider()}
+_IMPLEMENTED: dict[str, Provider] = {
+    "anthropic": AnthropicSDKProvider(),
+    "openai": OpenAICodexProvider(),
+}
 _STUBS: dict[str, Provider] = {n: UnimplementedProvider(n) for n in _STUB_NAMES}
 _REGISTRY: dict[str, Provider] = {**_IMPLEMENTED, **_STUBS}
 
