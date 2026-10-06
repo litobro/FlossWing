@@ -174,6 +174,103 @@ async def test_run_session_passes_scope_and_ctx_to_drive_turn(
 
 
 # -----------------------------------------------------------------------------
+# _approval_response: fail-closed server->client request handling (pure)
+# -----------------------------------------------------------------------------
+
+
+def _elicit(*, kind: str | None, server: str | None) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    if kind is not None:
+        meta["codex_approval_kind"] = kind
+    params: dict[str, Any] = {"_meta": meta}
+    if server is not None:
+        params["serverName"] = server
+    return params
+
+
+def test_approval_response_accepts_scoped_flosswing_tool_call() -> None:
+    body = oc._approval_response(
+        "mcpServer/elicitation/request",
+        _elicit(kind="mcp_tool_call", server="flosswing"),
+    )
+    assert body == {"result": {"action": "accept", "content": {}}}
+
+
+def test_approval_response_declines_other_server() -> None:
+    body = oc._approval_response(
+        "mcpServer/elicitation/request",
+        _elicit(kind="mcp_tool_call", server="shell"),
+    )
+    assert body == {"result": {"action": "decline", "content": None}}
+
+
+def test_approval_response_declines_non_tool_call_elicitation() -> None:
+    body = oc._approval_response(
+        "mcpServer/elicitation/request",
+        _elicit(kind="something_else", server="flosswing"),
+    )
+    assert body == {"result": {"action": "decline", "content": None}}
+
+
+def test_approval_response_declines_elicitation_missing_meta() -> None:
+    body = oc._approval_response("mcpServer/elicitation/request", {})
+    assert body == {"result": {"action": "decline", "content": None}}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval",
+        "execCommandApproval",
+        "applyPatchApproval",
+    ],
+)
+def test_approval_response_declines_command_patch_permission(method: str) -> None:
+    # The REQUIRED `decision` field (empty {} would stall the turn).
+    assert oc._approval_response(method, {}) == {"result": {"decision": "decline"}}
+
+
+def test_approval_response_unknown_request_is_method_not_found() -> None:
+    body = oc._approval_response("some/unknown/request", {})
+    assert body == {"error": {"code": -32601, "message": "unmethod"}}
+    assert "result" not in body  # never an ambiguous empty {}
+
+
+# -----------------------------------------------------------------------------
+# _augmented_env: minimal allowlisted child env (no secret leakage)
+# -----------------------------------------------------------------------------
+
+
+def test_augmented_env_excludes_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    from flosswing.config import AUTH_ENV_KEYS
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "foundry-secret")
+    monkeypatch.setenv("FLOSSWING_DB_URL", "sqlite:///state.db")
+    monkeypatch.setenv("FLOSSWING_MODEL", "gpt-daybreak-blue-latest")
+    env = oc._augmented_env()
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_FOUNDRY_API_KEY" not in env
+    assert not (set(env) & AUTH_ENV_KEYS)
+    # FlossWing config passes through so the stdio MCP child reaches the DB.
+    assert env["FLOSSWING_DB_URL"] == "sqlite:///state.db"
+    assert env["FLOSSWING_MODEL"] == "gpt-daybreak-blue-latest"
+
+
+def test_augmented_env_appends_local_bin_to_existing_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    env = oc._augmented_env()
+    path_parts = env["PATH"].split(":")
+    assert path_parts[0] == "/usr/bin"  # existing PATH kept first (not shadowed)
+    assert path_parts[1] == "/bin"
+    assert any(p.endswith("/.local/bin") for p in path_parts)
+
+
+# -----------------------------------------------------------------------------
 # stage -> scope mapping (pure)
 # -----------------------------------------------------------------------------
 

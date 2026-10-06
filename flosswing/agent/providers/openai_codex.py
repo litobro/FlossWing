@@ -295,24 +295,91 @@ def _build_server_args(
 
 # --- The single patchable subprocess / app-server I/O boundary ---------------
 
+# Codex's command/patch/permission approval requests (arriving as server->client
+# requests under approvalPolicy="untrusted"). Their response body needs a
+# ``decision`` field — NOT an empty ``{}`` (which stalls the turn to the
+# timeout). We FAIL CLOSED: decline every one (FlossWing grants nothing via the
+# built-in tools; only the flosswing MCP elicitation is ever accepted).
+_APPROVAL_DECISION_METHODS: frozenset[str] = frozenset(
+    {
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval",
+        "execCommandApproval",  # legacy
+        "applyPatchApproval",  # legacy
+    }
+)
+
+
+def _approval_response(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Decide the JSON-RPC payload body for a server->client request (pure).
+
+    Returns the body to merge with ``{"jsonrpc","id"}`` — either a ``result`` or
+    a JSON-RPC ``error``. FAIL CLOSED: the only ``accept`` is our own scoped
+    ``flosswing`` MCP tool-call elicitation; everything else declines, and an
+    unrecognised request gets a method-not-found error (never an ambiguous
+    empty ``{}``). Unit-testable without a subprocess.
+    """
+    if method == "mcpServer/elicitation/request":
+        meta = params.get("_meta")
+        meta = meta if isinstance(meta, dict) else {}
+        kind = meta.get("codex_approval_kind")
+        server_name = params.get("serverName")
+        # Scoped approval (Task 8 factors this into _should_auto_approve):
+        # ACCEPT only our own flosswing MCP tool-call elicitations; DECLINE every
+        # other elicitation (another server, a non-tool-call kind). Never a
+        # blanket approve — that would re-open the hole the sandbox exists to
+        # close.
+        if kind == "mcp_tool_call" and server_name == "flosswing":
+            return {"result": {"action": "accept", "content": {}}}
+        return {"result": {"action": "decline", "content": None}}
+    if method in _APPROVAL_DECISION_METHODS:
+        # Command/patch/permission approval: decline with the REQUIRED decision
+        # field (an empty {} here would stall the turn under "untrusted").
+        return {"result": {"decision": "decline"}}
+    # Any other server->client request: explicit method-not-found, never {}.
+    return {"error": {"code": -32601, "message": "unmethod"}}
+
 
 def _augmented_env() -> dict[str, str]:
-    """Inherit the process env, ensuring the Codex + node binaries are on PATH.
+    """Build a MINIMAL allowlisted env for the codex child (secret-exposure).
 
-    ``codex`` installs to ``~/.local/bin`` and is a node CLI, so the node bin
-    dir must also be reachable. OP-2: auth is the local ``codex login`` session
-    in ``~/.codex`` (never an env credential), so nothing sensitive is added.
+    The default ``dict(os.environ)`` would hand the child every FlossWing auth
+    credential (ANTHROPIC_API_KEY, ANTHROPIC_FOUNDRY_API_KEY, AWS keys, ...),
+    none of which codex needs — it authenticates via the local ``codex login``
+    session in ``~/.codex``. We therefore copy only an explicit allowlist and
+    then strip anything in ``config.AUTH_ENV_KEYS`` belt-and-suspenders.
+
+    PATH is APPENDED to (never prepended), so we don't shadow system binaries;
+    ``~/.local/bin`` (where ``codex`` installs) and the ``node`` bin dir (codex
+    is a node CLI) are added after the inherited PATH. ``FLOSSWING_DB_URL`` and
+    any other ``FLOSSWING_*`` key must pass through so the stdio MCP child the
+    app-server spawns reaches the same state DB.
     """
-    env = dict(os.environ)
-    parts = [os.path.expanduser("~/.local/bin")]
+    # Imported here (not at module top) to avoid a config<->registry<->provider
+    # import cycle; by call time every module is already loaded.
+    from flosswing.config import AUTH_ENV_KEYS
+
+    src = os.environ
+    allow_exact = {"HOME", "CODEX_HOME", "LANG", "TERM", "TMPDIR", "PATH"}
+    out: dict[str, str] = {}
+    for key, val in src.items():
+        if key in AUTH_ENV_KEYS:
+            continue  # never leak a FlossWing credential to the child
+        if (
+            key in allow_exact
+            or key.startswith("FLOSSWING_")
+            or key.startswith("LC_")
+        ):
+            out[key] = val
+
+    parts = [out.get("PATH", "")]  # existing PATH first — append, don't prepend
+    parts.append(os.path.expanduser("~/.local/bin"))
     node = shutil.which("node")
     if node:
         parts.append(os.path.dirname(node))
-    existing = env.get("PATH", "")
-    if existing:
-        parts.append(existing)
-    env["PATH"] = os.pathsep.join(parts)
-    return env
+    out["PATH"] = os.pathsep.join(p for p in parts if p)
+    return out
 
 
 async def _drive_turn(
@@ -346,10 +413,16 @@ async def _drive_turn(
     (confirmed against ``codex app-server generate-ts``: ThreadStartParams /
     TurnStartParams expose only ToolsV2.web_search and AskForApproval's granular
     *approval* toggles, none of which remove the built-ins). So the mitigation
-    is layered: empty cwd + sandbox="read-only" + scoped MCP approval mean the
-    target repo is reachable only through the flosswing MCP tools (which take
-    repo_root out-of-band via the stdio server's CLI args), keeping the
-    _SIZE_CAP_BYTES / scrub() guarantees on the only path to ``/repo``.
+    is layered: empty cwd + sandbox="read-only" + scoped MCP approval.
+
+    RESIDUAL (honest): a ``read-only`` sandbox still permits READS of arbitrary
+    host paths via allowlisted shell commands that need no approval, so a
+    determined model could read ``/repo`` or elsewhere outside the flosswing
+    tools. The ``_SIZE_CAP_BYTES`` / ``scrub()`` guarantees therefore hold only
+    on the MCP-tool path. This mitigation REDUCES that surface (no injected
+    instructions, no writes, scoped approval) but does not fully CLOSE it; fully
+    closing it needs a sandbox that also restricts reads, which the app-server
+    does not expose.
     """
     del on_usage  # usage is harvested from the returned events in run_session
 
@@ -376,7 +449,9 @@ async def _drive_turn(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        # DEVNULL, not PIPE: we never read stderr, and an undrained PIPE would
+        # deadlock the child once it writes > ~64 KiB of diagnostics.
+        stderr=asyncio.subprocess.DEVNULL,
         env=env,
         cwd=work_dir,
     )
@@ -384,6 +459,7 @@ async def _drive_turn(
     collected: list[dict[str, Any]] = []
     pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
     turn_done = asyncio.Event()
+    turn_completed = False
     loop = asyncio.get_running_loop()
 
     async def _send(obj: dict[str, Any]) -> None:
@@ -396,60 +472,48 @@ async def _drive_turn(
         method = msg.get("method")
         params = msg.get("params")
         params = params if isinstance(params, dict) else {}
-        if method == "mcpServer/elicitation/request":
-            meta = params.get("_meta")
-            meta = meta if isinstance(meta, dict) else {}
-            kind = meta.get("codex_approval_kind")
-            server_name = params.get("serverName")
-            # Scoped approval (Task 8 factors this into _should_auto_approve):
-            # ACCEPT only our own flosswing MCP tool-call elicitations; DECLINE
-            # every other elicitation (a built-in shell/exec approval, another
-            # server). Never a blanket approve — that would re-open the hole the
-            # sandbox exists to close.
-            if kind == "mcp_tool_call" and server_name == "flosswing":
-                result: dict[str, Any] = {"action": "accept", "content": {}, "_meta": None}
-            else:
-                result = {"action": "decline", "content": None, "_meta": None}
-            await _send({"jsonrpc": "2.0", "id": mid, "result": result})
-        else:
-            # Unknown server->client request: empty result so the turn is not
-            # blocked. We grant nothing we were not asked to scope.
-            await _send({"jsonrpc": "2.0", "id": mid, "result": {}})
+        body = _approval_response(method if isinstance(method, str) else "", params)
+        await _send({"jsonrpc": "2.0", "id": mid, **body})
 
     async def _reader() -> None:
+        nonlocal turn_completed
         assert proc.stdout is not None
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break  # EOF: the app-server closed stdout / exited
-            text = line.decode(errors="replace").strip()
-            if not text:
-                continue
-            try:
-                msg = json.loads(text)
-            except ValueError:
-                continue
-            if not isinstance(msg, dict):
-                continue
-            collected.append(msg)
-            method = msg.get("method")
-            mid = msg.get("id")
-            if method is not None and mid is not None:
-                await _handle_server_request(msg)  # server->client request
-            elif method is None and mid is not None:
-                fut = pending.pop(mid, None)  # response to one of our requests
-                if fut is not None and not fut.done():
-                    fut.set_result(msg)
-            elif method == "turn/completed":
-                turn_done.set()
-        # EOF: unblock the turn wait and fail any outstanding handshake request
-        # so the driver never hangs on a dead process.
-        turn_done.set()
-        for fut in pending.values():
-            if not fut.done():
-                fut.set_exception(
-                    RuntimeError("codex app-server closed before responding")
-                )
+        try:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break  # EOF: the app-server closed stdout / exited
+                text = line.decode(errors="replace").strip()
+                if not text:
+                    continue
+                try:
+                    msg = json.loads(text)
+                except ValueError:
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+                collected.append(msg)
+                method = msg.get("method")
+                mid = msg.get("id")
+                if method is not None and mid is not None:
+                    await _handle_server_request(msg)  # server->client request
+                elif method is None and mid is not None:
+                    fut = pending.pop(mid, None)  # response to one of our requests
+                    if fut is not None and not fut.done():
+                        fut.set_result(msg)
+                elif method == "turn/completed":
+                    turn_completed = True
+                    turn_done.set()
+        finally:
+            # Always unblock the turn wait and fail any outstanding handshake
+            # request — even if a _send above raised — so the driver can never
+            # hang on a dead process.
+            turn_done.set()
+            for fut in pending.values():
+                if not fut.done():
+                    fut.set_exception(
+                        RuntimeError("codex app-server closed before responding")
+                    )
 
     async def _request(method: str, params: dict[str, Any], *, req_id: int) -> dict[str, Any]:
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -506,7 +570,7 @@ async def _drive_turn(
             await asyncio.wait_for(turn_done.wait(), timeout=_TURN_TIMEOUT_S)
     finally:
         reader_task.cancel()
-        with contextlib.suppress(BaseException):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await reader_task
         with contextlib.suppress(Exception):
             if proc.stdin is not None:
@@ -517,6 +581,13 @@ async def _drive_turn(
             await asyncio.wait_for(proc.wait(), timeout=5.0)
         shutil.rmtree(work_dir, ignore_errors=True)
 
+    if not turn_completed:
+        # The turn never reached ``turn/completed`` (timeout, EOF, or crash).
+        # Feed a synthetic JSON-RPC error event so _classify_events yields
+        # ``errored`` — a stalled/timed-out turn must never be a silent success.
+        collected.append(
+            {"error": {"message": "codex app-server turn did not complete"}}
+        )
     return collected
 
 
