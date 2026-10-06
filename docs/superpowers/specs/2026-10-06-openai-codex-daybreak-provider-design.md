@@ -184,30 +184,34 @@ Because it is a **separate process**, it cannot share the in-process closures th
 Anthropic path uses (DB session, pre-allocated IDs). It is therefore
 parameterized explicitly via CLI args:
 
+Per-session context is passed explicitly (these mirror each stage's existing
+`_build_<scope>_tools` parameters, which differ by scope):
 ```
 --scope <recon|hunt|validate|dedupe|trace|gapfill>
---run-id <ulid>
---repo-root /repo
---db-path <~/.flosswing/runs/<id>/state.db>
---budget <int>
---agent-session-id <ulid>    # validate only
+--run-id <ulid>   --repo-root <path>
+# scope-specific, as needed: --hunt-task-id, --agent-session-id,
+#   --source, --budget-total, --gapfill-new-task-cap, --total-token-budget
 ```
+The DB is **not** passed as a path. FlossWing uses a single shared state DB
+resolved by `flosswing/state/session.py` from `FLOSSWING_DB_URL` (default
+`~/.flosswing/state.db`); the tool impls open their own `session_scope()`
+internally. The subprocess therefore only needs `FLOSSWING_DB_URL` present in
+its environment (inherited from the parent), and it reuses the exact `_wrap_call`
+success/`ToolError` payload semantics (`{"content":[...], "is_error": ...}`).
+WAL + `busy_timeout` (commit 31c53b3) make the concurrent connection safe.
+`/repo` stays read-only; writes go only to the state DB / scratch;
+`errors.scrub()` applies to everything crossing to the DB or stderr.
 
-It opens its **own** state-DB session (WAL + `busy_timeout` are already enabled —
-commit 31c53b3 — so concurrent processes are safe), rebuilds the scope's
-descriptors (§5), and dispatches `tools/call → pure impl`, reusing the exact
-`_wrap_call` success/`ToolError` payload semantics (`{"content":[...],
-"is_error": ...}`). `/repo` stays read-only; writes go only to the state DB /
-scratch. `errors.scrub()` applies to everything crossing to the DB or stderr.
-
-**Transactionality divergence (explicit).** Some tools *write*: Hunt's
-`record_finding`, and Validate's `validate_finding` (documented as writing "in
-the same transaction as the verdict"). With the writer now in a subprocess, that
-same-transaction invariant cannot hold across processes. This design specifies:
-the subprocess **owns** the row write and preserves the `agent_session_id`
-linkage; the main process reads the row back after the session — rather than
-assuming a shared transaction. This is the one place the Codex path's semantics
-intentionally differ from the Anthropic path, and tests must cover it.
+**Transactionality note (corrected).** Some tools *write* (Hunt's
+`record_finding`, Validate's `validate_finding`). In the current Anthropic path
+these writes already run in the tool impl's **own** `session_scope()`
+transaction — not inside the stage's verdict transaction — linked only by the
+pre-allocated `agent_session_id`. Moving the impl to a subprocess therefore
+changes *where* that self-contained transaction runs, not its atomicity. The one
+ordering requirement: the stage pre-INSERTs and commits the partial
+`agent_sessions` row **before** launching the session (Validate/Dedupe/Trace
+already do this), so the subprocess's FK to `agent_session_id` resolves. Tests
+must confirm the subprocess write lands and the linkage holds.
 
 ## 7. Component: `OpenAICodexProvider` + app-server driver + auth
 
