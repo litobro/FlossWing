@@ -30,29 +30,25 @@ responsibilities stages/gapfill.py and ARCHITECTURE.md § Stage 4.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from claude_agent_sdk import tool
-from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
 from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
+from flosswing.agent.tool_descriptors import (
+    build_gapfill_descriptors,
+    to_sdk_tool,
+)
 from flosswing.config import Config
-from flosswing.errors import FlosswingError, ToolValidationError
 from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, HuntTask
-from flosswing.tools import findings as t_findings
-from flosswing.tools import fs as t_fs
-from flosswing.tools import run_state as t_run_state
-from flosswing.tools import search as t_search
 
 _PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "prompts"
 _GAPFILL_SYSTEM_PROMPT_PATH = _PROMPTS_ROOT / "system" / "gapfill.md"
@@ -102,48 +98,6 @@ def _now_iso() -> str:
 # -----------------------------------------------------------------------------
 
 
-class _ToolError(BaseModel):
-    error: str
-    message: str
-    retryable: bool
-
-
-def _ok(payload: BaseModel) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": payload.model_dump_json()}]}
-
-
-def _err(code: str, message: str, retryable: bool) -> dict[str, Any]:
-    return {
-        "content": [
-            {
-                "type": "text",
-                "text": _ToolError(
-                    error=code, message=message, retryable=retryable
-                ).model_dump_json(),
-            }
-        ],
-        "is_error": True,
-    }
-
-
-def _wrap_call(
-    fn: Callable[..., BaseModel],
-    *,
-    input_model: type[BaseModel],
-    args: dict[str, Any],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    try:
-        inp = input_model.model_validate(args)
-    except ValidationError as e:
-        return _err(ToolValidationError.code, str(e), retryable=False)
-    try:
-        out = fn(inp, **kwargs)
-    except FlosswingError as e:
-        return _err(e.code, e.message, retryable=e.retryable)
-    return _ok(out)
-
-
 def _build_gapfill_tools(
     *,
     repo_root: Path,
@@ -162,113 +116,15 @@ def _build_gapfill_tools(
     message.
     """
     del agent_session_id  # reserved for future per-tool telemetry tagging
-
-    @tool(
-        "read_file",
-        "Read a file (or line range) from the target repository (read-only).",
-        t_fs.ReadFileInput.model_json_schema(),
-    )
-    async def _read_file(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_fs.read_file,
-            input_model=t_fs.ReadFileInput,
-            args=args,
+    return [
+        to_sdk_tool(d)
+        for d in build_gapfill_descriptors(
             repo_root=repo_root,
-        )
-
-    @tool(
-        "list_dir",
-        "List immediate children of a directory in the target repository.",
-        t_fs.ListDirInput.model_json_schema(),
-    )
-    async def _list_dir(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_fs.list_dir,
-            input_model=t_fs.ListDirInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "grep",
-        "Regex search the target repository via ripgrep.",
-        t_search.GrepInput.model_json_schema(),
-    )
-    async def _grep(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_search.grep,
-            input_model=t_search.GrepInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "query_findings",
-        (
-            "Read findings from the current run with optional filters on"
-            " finding_id, attack_class, file, status, min_severity."
-            " Useful for judging whether an attack class is"
-            " under-represented in the finding pool, not just in the"
-            " task pool."
-        ),
-        t_findings.QueryFindingsInput.model_json_schema(),
-    )
-    async def _query_findings(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.query_findings,
-            input_model=t_findings.QueryFindingsInput,
-            args=args,
             run_id=run_id,
-        )
-
-    @tool(
-        "query_run_state",
-        (
-            "Read aggregate run state: the recorded Recon architecture,"
-            " the list of hunt_tasks with status and findings_count,"
-            " budget_used and budget_remaining. Call once first; it is"
-            " the source of truth for what Recon proposed and what Hunt"
-            " did with it."
-        ),
-        t_run_state.QueryRunStateInput.model_json_schema(),
-    )
-    async def _query_run_state(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_run_state.query_run_state,
-            input_model=t_run_state.QueryRunStateInput,
-            args=args,
-            run_id=run_id,
+            gapfill_new_task_cap=gapfill_new_task_cap,
+            budget_total=budget_total,
             total_token_budget=total_token_budget,
         )
-
-    @tool(
-        "add_hunt_task",
-        (
-            "Enqueue a new Hunt task. Returns accepted=False with"
-            " reason='gapfill_cap_reached' once the 20% cap is hit, or"
-            " reason='budget exhausted (...)' if the global budget cap"
-            " is hit. Treat either as a stop signal."
-        ),
-        t_findings.AddHuntTaskInput.model_json_schema(),
-    )
-    async def _add_hunt_task(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.add_hunt_task,
-            input_model=t_findings.AddHuntTaskInput,
-            args=args,
-            run_id=run_id,
-            source="gapfill",
-            budget_total=budget_total,
-            gapfill_new_task_cap=gapfill_new_task_cap,
-        )
-
-    return [
-        _read_file,
-        _list_dir,
-        _grep,
-        _query_findings,
-        _query_run_state,
-        _add_hunt_task,
     ]
 
 

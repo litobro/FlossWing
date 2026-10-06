@@ -31,33 +31,27 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import tool
-from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
 from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
+from flosswing.agent.tool_descriptors import (
+    build_validate_descriptors,
+    to_sdk_tool,
+)
 from flosswing.config import Config
-from flosswing.errors import FlosswingError, ToolValidationError
 from flosswing.prompts import load_attack_class_fragment
-from flosswing.sandbox.base import CompileAndRunInput
 from flosswing.secrets_triage import classify_secret
 from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, Validation
-from flosswing.tools import execution as t_execution
-from flosswing.tools import findings as t_findings
-from flosswing.tools import fs as t_fs
-from flosswing.tools import search as t_search
-from flosswing.tools import symbols as t_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -117,67 +111,6 @@ def _now_iso() -> str:
 # -----------------------------------------------------------------------------
 
 
-class _ToolError(BaseModel):
-    error: str
-    message: str
-    retryable: bool
-
-
-def _ok(payload: BaseModel) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": payload.model_dump_json()}]}
-
-
-def _err(code: str, message: str, retryable: bool) -> dict[str, Any]:
-    return {
-        "content": [
-            {
-                "type": "text",
-                "text": _ToolError(
-                    error=code, message=message, retryable=retryable
-                ).model_dump_json(),
-            }
-        ],
-        "is_error": True,
-    }
-
-
-def _wrap_call(
-    fn: Callable[..., BaseModel],
-    *,
-    input_model: type[BaseModel],
-    args: dict[str, Any],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    try:
-        inp = input_model.model_validate(args)
-    except ValidationError as e:
-        return _err(ToolValidationError.code, str(e), retryable=False)
-    try:
-        out = fn(inp, **kwargs)
-    except FlosswingError as e:
-        return _err(e.code, e.message, retryable=e.retryable)
-    return _ok(out)
-
-
-async def _wrap_async_call(
-    fn: Callable[..., Any],
-    *,
-    input_model: type[BaseModel],
-    args: dict[str, Any],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    """Async variant for compile_and_run (the only async tool in Validate)."""
-    try:
-        inp = input_model.model_validate(args)
-    except ValidationError as e:
-        return _err(ToolValidationError.code, str(e), retryable=False)
-    try:
-        out = await fn(inp, **kwargs)
-    except FlosswingError as e:
-        return _err(e.code, e.message, retryable=e.retryable)
-    return _ok(out)
-
-
 def _build_validate_tools(
     *,
     repo_root: Path,
@@ -201,144 +134,11 @@ def _build_validate_tools(
     # tightening — e.g. server-side rejection if the agent supplies a
     # different finding_id — has the per-session binding available.
     del finding_id
-
-    @tool(
-        "read_file",
-        "Read a file (or line range) from the target repository (read-only).",
-        t_fs.ReadFileInput.model_json_schema(),
-    )
-    async def _read_file(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_fs.read_file,
-            input_model=t_fs.ReadFileInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "list_dir",
-        "List immediate children of a directory in the target repository.",
-        t_fs.ListDirInput.model_json_schema(),
-    )
-    async def _list_dir(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_fs.list_dir,
-            input_model=t_fs.ListDirInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "grep",
-        "Regex search the target repository via ripgrep.",
-        t_search.GrepInput.model_json_schema(),
-    )
-    async def _grep(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_search.grep,
-            input_model=t_search.GrepInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "find_definition",
-        (
-            "Locate the definition of a symbol in the indexed target"
-            " repository. Optional file_hint or language narrows the"
-            " search."
-        ),
-        t_symbols.FindDefinitionInput.model_json_schema(),
-    )
-    async def _find_definition(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_symbols.find_definition,
-            input_model=t_symbols.FindDefinitionInput,
-            args=args,
-            run_id=run_id,
-        )
-
-    @tool(
-        "find_callers",
-        (
-            "List call sites for a symbol. Returns symbol_not_found if"
-            " no definition exists; ambiguous_symbol with candidates if"
-            " >1 match (retry with file_hint to disambiguate)."
-        ),
-        t_symbols.FindCallersInput.model_json_schema(),
-    )
-    async def _find_callers(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_symbols.find_callers,
-            input_model=t_symbols.FindCallersInput,
-            args=args,
-            run_id=run_id,
-        )
-
-    @tool(
-        "compile_and_run",
-        (
-            "Build and execute attacker-supplied PoC code in an isolated"
-            " sandbox. Returns exit code, stdout, stderr, duration, and"
-            " resource usage. Use this to confirm or reject a finding by"
-            " observing the bug's expected side effect."
-        ),
-        CompileAndRunInput.model_json_schema(),
-    )
-    async def _compile_and_run(args: dict[str, Any]) -> dict[str, Any]:
-        return await _wrap_async_call(
-            t_execution.compile_and_run,
-            input_model=CompileAndRunInput,
-            args=args,
-            run_id=run_id,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "query_findings",
-        (
-            "Read findings from the current run with optional filters on"
-            " finding_id, attack_class, file, status, min_severity."
-            " Useful for pulling the full row of the finding under review."
-        ),
-        t_findings.QueryFindingsInput.model_json_schema(),
-    )
-    async def _query_findings(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.query_findings,
-            input_model=t_findings.QueryFindingsInput,
-            args=args,
-            run_id=run_id,
-        )
-
-    @tool(
-        "validate_finding",
-        (
-            "Record your adversarial-review verdict for the assigned"
-            " finding. Call exactly once with verdict ('confirmed',"
-            " 'rejected', or 'uncertain'), rationale (>=50 chars), and"
-            " an optional evidence_files list."
-        ),
-        t_findings.ValidateFindingInput.model_json_schema(),
-    )
-    async def _validate_finding(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.validate_finding,
-            input_model=t_findings.ValidateFindingInput,
-            args=args,
-            run_id=run_id,
-            agent_session_id=agent_session_id,
-        )
-
     return [
-        _read_file,
-        _list_dir,
-        _grep,
-        _find_definition,
-        _find_callers,
-        _compile_and_run,
-        _query_findings,
-        _validate_finding,
+        to_sdk_tool(d)
+        for d in build_validate_descriptors(
+            repo_root=repo_root, run_id=run_id, agent_session_id=agent_session_id
+        )
     ]
 
 
