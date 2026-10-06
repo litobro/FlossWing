@@ -157,25 +157,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     by_name = _build_descriptors(args, parser)
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-            if not isinstance(msg, dict):
-                raise ValueError("message must be a JSON object")
-        except ValueError as e:
-            resp: dict[str, Any] | None = _error(None, -32700, scrub(f"parse error: {e}"))
-        else:
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
             try:
-                resp = handle_message(msg, by_name)
-            except Exception as e:  # keep the server alive on tool bugs
-                _log(f"internal error: {type(e).__name__}: {e}")
-                resp = _error(msg.get("id"), -32603, "internal error") if "id" in msg else None
-        if resp is not None:
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
+                msg = json.loads(line)
+                if not isinstance(msg, dict):
+                    raise ValueError("message must be a JSON object")
+            except ValueError as e:
+                resp: dict[str, Any] | None = _error(None, -32700, scrub(f"parse error: {e}"))
+            else:
+                try:
+                    resp = handle_message(msg, by_name)
+                except Exception as e:  # keep the server alive on tool bugs
+                    _log(f"internal error: {type(e).__name__}: {e}")
+                    resp = _error(msg.get("id"), -32603, "internal error") if "id" in msg else None
+            if resp is not None:
+                sys.stdout.write(json.dumps(resp) + "\n")
+                sys.stdout.flush()
+    except BrokenPipeError:
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    except Exception as e:
+        _log(f"fatal: {type(e).__name__}: {e}")
+        return 1
     return 0
 
 

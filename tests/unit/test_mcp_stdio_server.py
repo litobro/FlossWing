@@ -170,6 +170,7 @@ def test_subprocess_round_trip_writes_finding(tmp_path: Path) -> None:
         ).fetchall()
     assert len(rows) == 1
     assert rows[0][1] == run_id
+    assert rows[0][2] == task_id
 
 
 def test_main_rejects_missing_scope_args() -> None:
