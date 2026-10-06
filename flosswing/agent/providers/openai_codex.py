@@ -121,10 +121,13 @@ def _classify_events(events: list[dict[str, Any]], *, budget: int) -> SessionRes
 
     refusal_text: str | None = None
     stop_reason: str | None = None
-    if api_error is None and final_text is not None and _looks_like_decline(final_text):
+    if final_text is not None and _looks_like_decline(final_text):
         refusal_text = final_text
         if tool_calls == 0:
+            # Terminal refusal: detected BEFORE the error branch so a refusal
+            # can never be laundered into ``errored`` (refusal overrides error).
             stop_reason = "refusal"
+            api_error = None
 
     result = _classify(
         stop_reason=stop_reason,

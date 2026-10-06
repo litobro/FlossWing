@@ -72,12 +72,33 @@ def test_budget_exceeded() -> None:
     assert res.outcome == "budget_exceeded"
 
 
-def test_turn_error_is_errored_not_refused() -> None:
-    evs = _sc_events("refusal.jsonl")
+def _with_turn_error(evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for e in evs:
         if e.get("method") == "turn/completed":
             e["params"]["turn"]["status"] = "failed"
             e["params"]["turn"]["error"] = {"message": "boom"}
+    return evs
+
+
+def test_refusal_with_turn_error_is_refused_not_errored() -> None:
+    res = _classify_events(_with_turn_error(_sc_events("refusal.jsonl")), budget=10_000_000)
+    assert res.outcome == "refused"
+    assert res.refusal_text
+    assert res.error_text is None
+
+
+def test_turn_error_without_decline_text_is_errored() -> None:
+    evs = _with_turn_error(_sc_events("round_trip.jsonl"))
+    res = _classify_events(evs, budget=10_000_000)
+    assert res.outcome == "errored"
+
+
+def test_turn_error_with_decline_text_and_tool_calls_is_errored() -> None:
+    evs = _with_turn_error(_sc_events("round_trip.jsonl"))
+    for e in evs:
+        item = e.get("params", {}).get("item", {})
+        if item.get("type") == "agentMessage":
+            item["text"] = "I can't help with that part."
     res = _classify_events(evs, budget=10_000_000)
     assert res.outcome == "errored"
 
