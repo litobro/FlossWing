@@ -100,3 +100,13 @@ def test_resolve_zero_tokens_zero_authoritative_is_zero() -> None:
         authoritative=0.0,
     )
     assert cost == 0.0
+
+
+def test_daybreak_blue_has_explicit_rate() -> None:
+    assert "gpt-daybreak-blue-latest" in pricing.MODEL_RATES
+    c = pricing.estimate_cost_usd(
+        model="gpt-daybreak-blue-latest",
+        input_tokens=1_000_000,
+        output_tokens=0,
+    )
+    assert c == pricing.MODEL_RATES["gpt-daybreak-blue-latest"][0]
