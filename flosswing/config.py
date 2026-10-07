@@ -46,6 +46,7 @@ backward-compat alias for the old `token_budget` name.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,8 @@ from pathlib import Path
 from flosswing.agent.providers import registry
 from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
 from flosswing.errors import ProviderNotImplementedError
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL: str = "claude-opus-4-8"
 
@@ -152,9 +155,32 @@ def resolve(
         k: os.environ[k] for k in prov.auth_env_keys if k in os.environ
     }
 
+    # Model precedence: explicit flag > FLOSSWING_MODEL > the selected provider's
+    # own default_model (plain class attr; getattr so stubs/UnimplementedProvider
+    # with no such attr fall through) > the global DEFAULT_MODEL. This keeps a
+    # flagless `--provider openai` run from sending the Anthropic default to Codex.
+    resolved_model = (
+        model
+        or os.environ.get(MODEL_ENV_VAR)
+        or getattr(prov, "default_model", None)
+        or DEFAULT_MODEL
+    )
+    if provider_name == "openai" and resolved_model.startswith("claude-"):
+        logger.warning(
+            "provider 'openai' resolved to model %r (a claude-* model); this is "
+            "likely a misconfiguration — Codex/Daybreak expects a gpt-* model.",
+            resolved_model,
+        )
+    elif provider_name == "anthropic" and resolved_model.startswith("gpt-"):
+        logger.warning(
+            "provider 'anthropic' resolved to model %r (a gpt-* model); this is "
+            "likely a misconfiguration.",
+            resolved_model,
+        )
+
     return Config(
         repo_root=repo_root,
-        model=model or env_or_default_model(),
+        model=resolved_model,
         recon_token_budget=(
             recon_token_budget
             if recon_token_budget is not None

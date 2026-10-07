@@ -1,0 +1,528 @@
+# FlossWing — local-CLI vulnerability research harness.
+# Copyright (C) 2026  FlossWing contributors
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+"""OpenAICodexProvider.run_session — stage->scope + ctx assembly + event
+reduction, with the subprocess/app-server I/O boundary (``_drive_turn``)
+mocked. ``_drive_turn`` itself is exercised only by the gated Task 9
+integration test; it is never launched here.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+from ulid import ULID
+
+from flosswing.agent.providers import openai_codex as oc
+from flosswing.state import session as st_session
+from flosswing.state.models import HuntTask, Run
+
+FIX = Path(__file__).parent.parent / "fixtures" / "codex"
+
+
+def _sc_events(name: str) -> list[dict[str, Any]]:
+    """Replay the server->client messages of a committed app-server fixture."""
+    out: list[dict[str, Any]] = []
+    for line in (FIX / name).read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        if rec.get("dir") == "S->C":
+            out.append(rec["msg"])
+    return out
+
+
+# -----------------------------------------------------------------------------
+# run_session: event reduction with _drive_turn mocked
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_session_completes(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = _sc_events("round_trip.jsonl")
+
+    async def fake_drive(**kw: Any) -> list[dict[str, Any]]:
+        return events
+
+    monkeypatch.setattr(oc, "_drive_turn", fake_drive)
+    monkeypatch.setattr(
+        oc, "_build_server_args", lambda **kw: ["--run-id", "r", "--repo-root", "/repo"]
+    )
+    r = await oc.OpenAICodexProvider().run_session(
+        model="gpt-daybreak-blue-latest",
+        system_prompt="",
+        tools=[],
+        user_prompt="",
+        token_budget=10_000_000,
+        auth_env={},
+        run_id="r",
+        stage="recon",
+    )
+    assert r.outcome == "completed"
+    assert r.cost_usd is None
+    assert r.tool_calls_count >= 1
+    assert r.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_run_session_emits_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = _sc_events("round_trip.jsonl")
+
+    async def fake_drive(**kw: Any) -> list[dict[str, Any]]:
+        return events
+
+    monkeypatch.setattr(oc, "_drive_turn", fake_drive)
+    monkeypatch.setattr(
+        oc, "_build_server_args", lambda **kw: ["--run-id", "r", "--repo-root", "/repo"]
+    )
+    snaps: list[Any] = []
+    await oc.OpenAICodexProvider().run_session(
+        model="gpt-daybreak-blue-latest",
+        system_prompt="",
+        tools=[],
+        user_prompt="",
+        token_budget=10_000_000,
+        auth_env={},
+        run_id="r",
+        stage="recon",
+        on_usage=snaps.append,
+    )
+    assert snaps and snaps[-1].input_tokens > 0
+    assert snaps[-1].cost_usd is None
+
+
+@pytest.mark.asyncio
+async def test_run_session_refusal_maps_to_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _sc_events("refusal.jsonl")
+
+    async def fake_drive(**kw: Any) -> list[dict[str, Any]]:
+        return events
+
+    monkeypatch.setattr(oc, "_drive_turn", fake_drive)
+    monkeypatch.setattr(
+        oc, "_build_server_args", lambda **kw: ["--run-id", "r", "--repo-root", "/repo"]
+    )
+    r = await oc.OpenAICodexProvider().run_session(
+        model="gpt-daybreak-blue-latest",
+        system_prompt="",
+        tools=[],
+        user_prompt="",
+        token_budget=10_000_000,
+        auth_env={},
+        run_id="r",
+        stage="recon",
+    )
+    assert r.outcome == "refused"
+    assert r.refusal_text
+
+
+@pytest.mark.asyncio
+async def test_run_session_passes_scope_and_ctx_to_drive_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_drive(**kw: Any) -> list[dict[str, Any]]:
+        captured.update(kw)
+        return _sc_events("round_trip.jsonl")
+
+    monkeypatch.setattr(oc, "_drive_turn", fake_drive)
+    monkeypatch.setattr(
+        oc,
+        "_build_server_args",
+        lambda **kw: ["--run-id", kw["run_id"], "--repo-root", "/repo",
+                      "--hunt-task-id", kw["task_id"]],
+    )
+    await oc.OpenAICodexProvider().run_session(
+        model="gpt-daybreak-blue-latest",
+        system_prompt="SYS",
+        tools=[object()],
+        user_prompt="go",
+        token_budget=10_000,
+        auth_env={"ANTHROPIC_API_KEY": "x"},
+        run_id="run1",
+        stage="hunt",
+        task_id="task1",
+    )
+    assert captured["scope"] == "hunt"
+    assert captured["model"] == "gpt-daybreak-blue-latest"
+    assert captured["system_prompt"] == "SYS"
+    assert captured["user_prompt"] == "go"
+    assert captured["ctx"] == [
+        "--run-id", "run1", "--repo-root", "/repo", "--hunt-task-id", "task1",
+    ]
+
+
+# -----------------------------------------------------------------------------
+# _approval_response: fail-closed server->client request handling (pure)
+# -----------------------------------------------------------------------------
+
+
+def _elicit(*, kind: str | None, server: str | None) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    if kind is not None:
+        meta["codex_approval_kind"] = kind
+    params: dict[str, Any] = {"_meta": meta}
+    if server is not None:
+        params["serverName"] = server
+    return params
+
+
+def test_approval_response_accepts_scoped_flosswing_tool_call() -> None:
+    body = oc._approval_response(
+        "mcpServer/elicitation/request",
+        _elicit(kind="mcp_tool_call", server="flosswing"),
+    )
+    assert body == {"result": {"action": "accept", "content": {}}}
+
+
+def test_approval_response_declines_other_server() -> None:
+    body = oc._approval_response(
+        "mcpServer/elicitation/request",
+        _elicit(kind="mcp_tool_call", server="shell"),
+    )
+    assert body == {"result": {"action": "decline", "content": None}}
+
+
+def test_approval_response_declines_non_tool_call_elicitation() -> None:
+    body = oc._approval_response(
+        "mcpServer/elicitation/request",
+        _elicit(kind="something_else", server="flosswing"),
+    )
+    assert body == {"result": {"action": "decline", "content": None}}
+
+
+def test_approval_response_declines_elicitation_missing_meta() -> None:
+    body = oc._approval_response("mcpServer/elicitation/request", {})
+    assert body == {"result": {"action": "decline", "content": None}}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval",
+        "execCommandApproval",
+        "applyPatchApproval",
+    ],
+)
+def test_approval_response_declines_command_patch_permission(method: str) -> None:
+    # The REQUIRED `decision` field (empty {} would stall the turn).
+    assert oc._approval_response(method, {}) == {"result": {"decision": "decline"}}
+
+
+def test_approval_response_unknown_request_is_method_not_found() -> None:
+    body = oc._approval_response("some/unknown/request", {})
+    assert body == {"error": {"code": -32601, "message": "unmethod"}}
+    assert "result" not in body  # never an ambiguous empty {}
+
+
+# -----------------------------------------------------------------------------
+# _augmented_env: minimal allowlisted child env (no secret leakage)
+# -----------------------------------------------------------------------------
+
+
+def test_augmented_env_excludes_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    from flosswing.config import AUTH_ENV_KEYS
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "foundry-secret")
+    monkeypatch.setenv("FLOSSWING_DB_URL", "sqlite:///state.db")
+    monkeypatch.setenv("FLOSSWING_MODEL", "gpt-daybreak-blue-latest")
+    env = oc._augmented_env()
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_FOUNDRY_API_KEY" not in env
+    assert not (set(env) & AUTH_ENV_KEYS)
+    # FlossWing config passes through so the stdio MCP child reaches the DB.
+    assert env["FLOSSWING_DB_URL"] == "sqlite:///state.db"
+    assert env["FLOSSWING_MODEL"] == "gpt-daybreak-blue-latest"
+
+
+def test_augmented_env_appends_local_bin_to_existing_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    env = oc._augmented_env()
+    path_parts = env["PATH"].split(":")
+    assert path_parts[0] == "/usr/bin"  # existing PATH kept first (not shadowed)
+    assert path_parts[1] == "/bin"
+    assert any(p.endswith("/.local/bin") for p in path_parts)
+
+
+def test_augmented_env_pythonpath_includes_package_parent() -> None:
+    import os
+    from pathlib import Path
+
+    import flosswing
+
+    pkg_parent = str(Path(flosswing.__file__).resolve().parents[1])
+    env = oc._augmented_env()
+    # CRIT#1: the app-server-spawned MCP child (empty cwd, minimal env) must be
+    # able to `-m flosswing...` — so the package parent is on PYTHONPATH.
+    assert pkg_parent in env["PYTHONPATH"].split(os.pathsep)
+
+
+def test_augmented_env_prepends_package_parent_to_inherited_pythonpath(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    from pathlib import Path
+
+    import flosswing
+
+    monkeypatch.setenv("PYTHONPATH", "/inherited/one")
+    pkg_parent = str(Path(flosswing.__file__).resolve().parents[1])
+    env = oc._augmented_env()
+    parts = env["PYTHONPATH"].split(os.pathsep)
+    assert parts[0] == pkg_parent  # prepended
+    assert "/inherited/one" in parts  # inherited preserved
+
+
+def test_augmented_env_passes_through_docker_and_proxy_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flosswing.config import AUTH_ENV_KEYS
+
+    # IMPORTANT#3: the children need these (Docker for compile_and_run in the
+    # validate scope; proxy/CA for codex egress). None is a credential key.
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:8080")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/certs/ca.pem")
+    monkeypatch.setenv("VIRTUAL_ENV", "/tmp/flw-venv")
+    env = oc._augmented_env()
+    assert env["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+    assert env["HTTPS_PROXY"] == "http://proxy:8080"
+    assert env["SSL_CERT_FILE"] == "/etc/ssl/certs/ca.pem"
+    assert env["VIRTUAL_ENV"] == "/tmp/flw-venv"
+    assert not (
+        {"DOCKER_HOST", "HTTPS_PROXY", "SSL_CERT_FILE", "VIRTUAL_ENV"} & AUTH_ENV_KEYS
+    )
+
+
+# -----------------------------------------------------------------------------
+# stage -> scope mapping (pure)
+# -----------------------------------------------------------------------------
+
+
+def test_stage_to_scope_identity() -> None:
+    for s in ("recon", "hunt", "validate", "dedupe", "trace", "gapfill"):
+        assert oc._stage_to_scope(s) == s
+
+
+def test_stage_to_scope_rejects_unknown() -> None:
+    with pytest.raises(ValueError):
+        oc._stage_to_scope("index_build")
+
+
+# -----------------------------------------------------------------------------
+# OP-1: ctx assembly from the state DB by run_id
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def fresh_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("FLOSSWING_DB_URL", "sqlite:///:memory:")
+    st_session._cached_engine = None  # type: ignore[attr-defined]
+    st_session._cached_session_factory = None  # type: ignore[attr-defined]
+    yield
+    st_session._cached_engine = None  # type: ignore[attr-defined]
+    st_session._cached_session_factory = None  # type: ignore[attr-defined]
+
+
+def _seed_run(run_id: str, *, config_json: str = "{}") -> None:
+    with st_session.session_scope() as s:
+        s.add(
+            Run(
+                id=run_id,
+                target_repo_path="/tmp/target-repo",
+                depth="standard",
+                budget_total=20,
+                started_at="2026-10-06T00:00:00Z",
+                config_json=config_json,
+                flosswing_version="0.0.0",
+            )
+        )
+
+
+def _seed_recon_tasks(run_id: str, n: int) -> None:
+    with st_session.session_scope() as s:
+        for _ in range(n):
+            s.add(
+                HuntTask(
+                    id=str(ULID()),
+                    run_id=run_id,
+                    attack_class="command_injection",
+                    scope_hint="src/",
+                    rationale="",
+                    priority="normal",
+                    source="recon",
+                    parent_finding_id=None,
+                    status="pending",
+                    created_at="2026-10-06T00:00:00Z",
+                    findings_count=0,
+                )
+            )
+
+
+def test_build_server_args_recon(fresh_db: None) -> None:
+    rid = str(ULID())
+    _seed_run(rid)
+    args = oc._build_server_args(
+        scope="recon", run_id=rid, task_id=None, agent_session_id=None
+    )
+    assert args == [
+        "--run-id", rid, "--repo-root", "/tmp/target-repo", "--budget-total", "20",
+    ]
+
+
+def test_build_server_args_hunt(fresh_db: None) -> None:
+    rid = str(ULID())
+    _seed_run(rid)
+    args = oc._build_server_args(
+        scope="hunt", run_id=rid, task_id="t42", agent_session_id=None
+    )
+    assert args == [
+        "--run-id", rid, "--repo-root", "/tmp/target-repo", "--hunt-task-id", "t42",
+    ]
+
+
+def test_build_server_args_validate_and_trace(fresh_db: None) -> None:
+    rid = str(ULID())
+    _seed_run(rid)
+    for scope in ("validate", "trace"):
+        args = oc._build_server_args(
+            scope=scope, run_id=rid, task_id=None, agent_session_id="sess9"
+        )
+        assert args == [
+            "--run-id", rid, "--repo-root", "/tmp/target-repo",
+            "--agent-session-id", "sess9",
+        ]
+
+
+def test_build_server_args_dedupe_has_no_extras(fresh_db: None) -> None:
+    rid = str(ULID())
+    _seed_run(rid)
+    args = oc._build_server_args(
+        scope="dedupe", run_id=rid, task_id=None, agent_session_id=None
+    )
+    assert args == ["--run-id", rid, "--repo-root", "/tmp/target-repo"]
+
+
+def test_build_server_args_gapfill(fresh_db: None) -> None:
+    rid = str(ULID())
+    # Mirrors orchestrator config_json: four per-stage token budgets present.
+    cfg = json.dumps(
+        {
+            "recon_token_budget": 200_000,
+            "hunt_token_budget": 200_000,
+            "validate_token_budget": 100_000,
+            "gapfill_token_budget": 50_000,
+        }
+    )
+    _seed_run(rid, config_json=cfg)
+    _seed_recon_tasks(rid, 12)  # cap = max(1, 12 // 5) = 2
+    args = oc._build_server_args(
+        scope="gapfill", run_id=rid, task_id=None, agent_session_id=None
+    )
+    assert args == [
+        "--run-id", rid, "--repo-root", "/tmp/target-repo",
+        "--gapfill-new-task-cap", "2",
+        "--budget-total", "20",
+        "--total-token-budget", "550000",
+    ]
+
+
+def test_build_server_args_missing_run_raises(fresh_db: None) -> None:
+    with pytest.raises(RuntimeError, match="not found"):
+        oc._build_server_args(
+            scope="recon", run_id="nope", task_id=None, agent_session_id=None
+        )
+
+
+def test_build_server_args_gapfill_unrecoverable_total_raises(fresh_db: None) -> None:
+    rid = str(ULID())
+    _seed_run(rid, config_json="{}")  # no token-budget keys
+    with pytest.raises(RuntimeError, match="total_token_budget"):
+        oc._build_server_args(
+            scope="gapfill", run_id=rid, task_id=None, agent_session_id=None
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_session_assembles_ctx_from_db(
+    fresh_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rid = str(ULID())
+    _seed_run(rid)
+    captured: dict[str, Any] = {}
+
+    async def fake_drive(**kw: Any) -> list[dict[str, Any]]:
+        captured.update(kw)
+        return _sc_events("round_trip.jsonl")
+
+    monkeypatch.setattr(oc, "_drive_turn", fake_drive)
+    r = await oc.OpenAICodexProvider().run_session(
+        model="gpt-daybreak-blue-latest",
+        system_prompt="",
+        tools=[],
+        user_prompt="",
+        token_budget=10_000_000,
+        auth_env={},
+        run_id=rid,
+        stage="hunt",
+        task_id="the-task",
+    )
+    assert r.outcome == "completed"
+    assert captured["scope"] == "hunt"
+    assert captured["ctx"] == [
+        "--run-id", rid, "--repo-root", "/tmp/target-repo", "--hunt-task-id", "the-task",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc", [OSError("codex app-server died"), RuntimeError("codex boom")]
+)
+async def test_process_crash_is_errored(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    async def fake_drive(**kw: Any) -> list[dict[str, Any]]:
+        raise exc
+
+    monkeypatch.setattr(oc, "_drive_turn", fake_drive)
+    monkeypatch.setattr(
+        oc, "_build_server_args", lambda **kw: ["--run-id", "r", "--repo-root", "/repo"]
+    )
+    r = await oc.OpenAICodexProvider().run_session(
+        model="gpt-daybreak-blue-latest",
+        system_prompt="",
+        tools=[],
+        user_prompt="",
+        token_budget=10_000_000,
+        auth_env={},
+        run_id="r",
+        stage="hunt",
+    )
+    assert r.outcome == "errored"
+    assert "codex" in (r.error_text or "").lower()

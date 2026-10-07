@@ -31,22 +31,22 @@ Pass 2 begins (open question Q#5 resolution: TWO transactions, not one).
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
-from claude_agent_sdk import tool
-from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
 from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
+from flosswing.agent.tool_descriptors import (
+    build_dedupe_descriptors,
+    to_sdk_tool,
+)
 from flosswing.config import Config
-from flosswing.errors import FlosswingError, ToolValidationError
 from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import (
@@ -55,8 +55,6 @@ from flosswing.state.models import (
     Finding,
     FindingLink,
 )
-from flosswing.tools import findings as t_findings
-from flosswing.tools import fs as t_fs
 
 _PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "prompts"
 _DEDUPE_SYSTEM_PROMPT_PATH = _PROMPTS_ROOT / "system" / "dedupe.md"
@@ -301,48 +299,6 @@ def _emit_cluster(
 # -----------------------------------------------------------------------------
 
 
-class _ToolError(BaseModel):
-    error: str
-    message: str
-    retryable: bool
-
-
-def _ok(payload: BaseModel) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": payload.model_dump_json()}]}
-
-
-def _err(code: str, message: str, retryable: bool) -> dict[str, Any]:
-    return {
-        "content": [
-            {
-                "type": "text",
-                "text": _ToolError(
-                    error=code, message=message, retryable=retryable
-                ).model_dump_json(),
-            }
-        ],
-        "is_error": True,
-    }
-
-
-def _wrap_call(
-    fn: Callable[..., BaseModel],
-    *,
-    input_model: type[BaseModel],
-    args: dict[str, Any],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    try:
-        inp = input_model.model_validate(args)
-    except ValidationError as e:
-        return _err(ToolValidationError.code, str(e), retryable=False)
-    try:
-        out = fn(inp, **kwargs)
-    except FlosswingError as e:
-        return _err(e.code, e.message, retryable=e.retryable)
-    return _ok(out)
-
-
 def _build_dedupe_tools(
     *,
     repo_root: Path,
@@ -353,77 +309,9 @@ def _build_dedupe_tools(
     Per docs/tool-contracts.md § Tool scope matrix: read_file,
     query_findings, merge_findings, link_variant.
     """
-
-    @tool(
-        "read_file",
-        "Read a file (or line range) from the target repository (read-only).",
-        t_fs.ReadFileInput.model_json_schema(),
-    )
-    async def _read_file(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_fs.read_file,
-            input_model=t_fs.ReadFileInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "query_findings",
-        (
-            "Read findings from the current run with optional filters on"
-            " finding_id, attack_class, file, status, min_severity."
-            " Use this to fetch the full body of each cluster member."
-        ),
-        t_findings.QueryFindingsInput.model_json_schema(),
-    )
-    async def _query_findings(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.query_findings,
-            input_model=t_findings.QueryFindingsInput,
-            args=args,
-            run_id=run_id,
-        )
-
-    @tool(
-        "merge_findings",
-        (
-            "Collapse N duplicate findings into a single primary. Pass"
-            " ALL duplicate IDs in one call; root_cause_summary must be"
-            " >= 50 chars of substantive prose. Duplicates become"
-            " status='superseded' — irreversible within the run."
-        ),
-        t_findings.MergeFindingsInput.model_json_schema(),
-    )
-    async def _merge_findings(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.merge_findings,
-            input_model=t_findings.MergeFindingsInput,
-            args=args,
-            run_id=run_id,
-        )
-
-    @tool(
-        "link_variant",
-        (
-            "Flag a relationship between two findings without merging."
-            " Both findings must share a dedupe_cluster_id. relationship"
-            " is one of: same_root_cause, exploit_chain, preconditions."
-        ),
-        t_findings.LinkVariantInput.model_json_schema(),
-    )
-    async def _link_variant(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.link_variant,
-            input_model=t_findings.LinkVariantInput,
-            args=args,
-            run_id=run_id,
-        )
-
     return [
-        _read_file,
-        _query_findings,
-        _merge_findings,
-        _link_variant,
+        to_sdk_tool(d)
+        for d in build_dedupe_descriptors(repo_root=repo_root, run_id=run_id)
     ]
 
 

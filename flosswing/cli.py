@@ -309,6 +309,9 @@ def report(run_id: str, format_: str, output_dir: str | None) -> None:
 @click.option("--corpus-root", "corpus_root", default="tests/corpus",
               type=click.Path(file_okay=False, dir_okay=True, resolve_path=True),
               help="Root for resolving a manifest's repo dir on the scan path.")
+@click.option("--provider", default=None,
+              help="Model provider backend for the scan (default anthropic; "
+                   "or FLOSSWING_PROVIDER). Ignored with --from-run.")
 @click.option("--include-uncertain", "include_uncertain", is_flag=True, default=False,
               help="Also score findings with status 'uncertain'.")
 @click.option("--json", "json_out", default=None,
@@ -325,6 +328,7 @@ def eval_(
     corpus_name: str | None,
     manifest_dir: str | None,
     corpus_root: str,
+    provider: str | None,
     include_uncertain: bool,
     json_out: str | None,
     min_recall: float | None,
@@ -356,6 +360,7 @@ def eval_(
             from_run=from_run,
             corpus_name=corpus_name,
             include_uncertain=include_uncertain,
+            provider=provider,
         )
     except (_errors.EvalConfigError, _errors.RunNotFoundError) as e:
         click.echo(_errors.scrub(e.message), err=True)

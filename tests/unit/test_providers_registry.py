@@ -8,6 +8,7 @@ import pytest
 
 from flosswing.agent.providers import registry as reg
 from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+from flosswing.agent.providers.openai_codex import OpenAICodexProvider
 from flosswing.errors import ProviderNotImplementedError, UnknownProviderError
 
 
@@ -16,7 +17,12 @@ def test_anthropic_is_implemented_and_returned() -> None:
     assert isinstance(reg.get_provider("anthropic"), AnthropicSDKProvider)
 
 
-@pytest.mark.parametrize("name", ["ollama", "openai", "bedrock", "cloudflare"])
+def test_openai_is_implemented_and_returned() -> None:
+    assert reg.is_implemented("openai") is True
+    assert isinstance(reg.get_provider("openai"), OpenAICodexProvider)
+
+
+@pytest.mark.parametrize("name", ["ollama", "bedrock", "cloudflare"])
 def test_stubs_registered_but_not_implemented(name: str) -> None:
     assert name in reg.registered_names()
     assert reg.is_implemented(name) is False

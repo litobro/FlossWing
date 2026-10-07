@@ -29,30 +29,26 @@ responsibilities stages/hunt.py.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import tool
-from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from ulid import ULID
 
 from flosswing.agent import pricing
 from flosswing.agent.runtime import run_session
+from flosswing.agent.tool_descriptors import (
+    build_hunt_descriptors,
+    to_sdk_tool,
+)
 from flosswing.config import Config
-from flosswing.errors import FlosswingError, ToolValidationError
 from flosswing.prompts import load_attack_class_fragment
 from flosswing.state import heartbeat as st_heartbeat
 from flosswing.state import session as st_session
 from flosswing.state.models import AgentSession, Finding, HuntTask
-from flosswing.tools import findings as t_findings
-from flosswing.tools import fs as t_fs
-from flosswing.tools import search as t_search
-from flosswing.tools import symbols as t_symbols
 
 _PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "prompts"
 _HUNT_SYSTEM_PROMPT_PATH = _PROMPTS_ROOT / "system" / "hunt.md"
@@ -102,52 +98,9 @@ def _compose_user_prompt(task: HuntTask) -> str:
 
 # -----------------------------------------------------------------------------
 # Tool builder — Hunt-scoped (6 tools in v0.5: read_file, list_dir, grep,
-# record_finding, find_definition, find_callers). Mirrors
-# agent.tool_registry.build_recon_tools shape; kept inline in this file
-# rather than expanded in tool_registry because it's the only Hunt consumer.
+# record_finding, find_definition, find_callers). Descriptors live in
+# agent.tool_descriptors; this wrapper adapts them to SDK tools.
 # -----------------------------------------------------------------------------
-
-
-class _ToolError(BaseModel):
-    error: str
-    message: str
-    retryable: bool
-
-
-def _ok(payload: BaseModel) -> dict[str, Any]:
-    return {"content": [{"type": "text", "text": payload.model_dump_json()}]}
-
-
-def _err(code: str, message: str, retryable: bool) -> dict[str, Any]:
-    return {
-        "content": [
-            {
-                "type": "text",
-                "text": _ToolError(
-                    error=code, message=message, retryable=retryable
-                ).model_dump_json(),
-            }
-        ],
-        "is_error": True,
-    }
-
-
-def _wrap_call(
-    fn: Callable[..., BaseModel],
-    *,
-    input_model: type[BaseModel],
-    args: dict[str, Any],
-    **kwargs: Any,
-) -> dict[str, Any]:
-    try:
-        inp = input_model.model_validate(args)
-    except ValidationError as e:
-        return _err(ToolValidationError.code, str(e), retryable=False)
-    try:
-        out = fn(inp, **kwargs)
-    except FlosswingError as e:
-        return _err(e.code, e.message, retryable=e.retryable)
-    return _ok(out)
 
 
 def _build_hunt_tools(
@@ -157,105 +110,11 @@ def _build_hunt_tools(
     hunt_task_id: str,
 ) -> list[Any]:
     """Build the 4 Hunt-scoped tool callables for ClaudeAgentOptions."""
-
-    @tool(
-        "read_file",
-        "Read a file (or line range) from the target repository (read-only).",
-        t_fs.ReadFileInput.model_json_schema(),
-    )
-    async def _read_file(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_fs.read_file,
-            input_model=t_fs.ReadFileInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "list_dir",
-        "List immediate children of a directory in the target repository.",
-        t_fs.ListDirInput.model_json_schema(),
-    )
-    async def _list_dir(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_fs.list_dir,
-            input_model=t_fs.ListDirInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "grep",
-        "Regex search the target repository via ripgrep.",
-        t_search.GrepInput.model_json_schema(),
-    )
-    async def _grep(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_search.grep,
-            input_model=t_search.GrepInput,
-            args=args,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "record_finding",
-        (
-            "Record a vulnerability finding. confidence='likely' or "
-            "'speculative' only in v0.3 (no compile_and_run yet)."
-        ),
-        t_findings.RecordFindingInput.model_json_schema(),
-    )
-    async def _record_finding(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_findings.record_finding,
-            input_model=t_findings.RecordFindingInput,
-            args=args,
-            run_id=run_id,
-            hunt_task_id=hunt_task_id,
-            repo_root=repo_root,
-        )
-
-    @tool(
-        "find_definition",
-        (
-            "Locate the definition of a symbol in the indexed target"
-            " repository. Optional file_hint or language narrows the"
-            " search."
-        ),
-        t_symbols.FindDefinitionInput.model_json_schema(),
-    )
-    async def _find_definition(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_symbols.find_definition,
-            input_model=t_symbols.FindDefinitionInput,
-            args=args,
-            run_id=run_id,
-        )
-
-    @tool(
-        "find_callers",
-        (
-            "List call sites for a symbol. Returns symbol_not_found if"
-            " no definition exists; ambiguous_symbol with candidates if"
-            " >1 match (retry with file_hint to disambiguate)."
-        ),
-        t_symbols.FindCallersInput.model_json_schema(),
-    )
-    async def _find_callers(args: dict[str, Any]) -> dict[str, Any]:
-        return _wrap_call(
-            t_symbols.find_callers,
-            input_model=t_symbols.FindCallersInput,
-            args=args,
-            run_id=run_id,
-        )
-
     return [
-        _read_file,
-        _list_dir,
-        _grep,
-        _record_finding,
-        _find_definition,
-        _find_callers,
+        to_sdk_tool(d)
+        for d in build_hunt_descriptors(
+            repo_root=repo_root, run_id=run_id, hunt_task_id=hunt_task_id
+        )
     ]
 
 

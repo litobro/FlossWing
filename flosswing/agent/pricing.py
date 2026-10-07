@@ -43,6 +43,10 @@ MODEL_RATES: dict[str, tuple[float, float]] = {
     # rate that outlives the promotion.
     "claude-sonnet-5": (3.0, 15.0),
     "claude-haiku-4-5": (1.00, 5.00),
+    # Daybreak via ChatGPT subscription has no per-token price; nominal,
+    # estimate-only (spec §10). Set to the Opus list rate as a placeholder
+    # until a confirmed GPT-5.6/Daybreak list rate is available.
+    "gpt-daybreak-blue-latest": (5.0, 25.0),
 }
 _DEFAULT_RATE: tuple[float, float] = (5.0, 25.0)
 

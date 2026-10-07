@@ -260,6 +260,11 @@ def _harvest_usage(raw: dict[str, Any] | None) -> dict[str, int]:
 class AnthropicSDKProvider:
     name = "anthropic"
     auth_env_keys = _AUTH_ENV_KEYS
+    # Provider-aware default model, read by config.resolve via getattr. Hardcoded
+    # (not imported from config) because config imports THIS module, so importing
+    # config here would be a cycle. MUST stay equal to config.DEFAULT_MODEL — a
+    # unit test (test_config) pins the two together.
+    default_model: str = "claude-opus-4-8"
 
     def validate_auth(self, env: Mapping[str, str]) -> None:
         """Raise AuthCredentialMissingError unless a usable auth path exists.
