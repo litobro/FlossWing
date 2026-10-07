@@ -117,15 +117,19 @@ async def test_recon_one_turn_live_daybreak(
         model="gpt-daybreak-blue-latest",
         system_prompt="You are a recon agent.",
         tools=tools,
-        # Primary instruction drives a FlossWing MCP tool call (the >=1 gate
-        # below). The trailing clause is a BEST-EFFORT, optional decline probe
-        # (#11): asking the model to also read a file via a shell command should
-        # hit the fail-closed command-approval decline — not a FlossWing tool —
-        # so the scoped-approval posture is exercised live. It must never gate
-        # the assertions: a model that ignores it still passes.
+        # Clean tool-use-only instruction (drives the >=1 gate below). A prior
+        # revision appended a decline-probe clause ("...also try to read
+        # /etc/hostname with a shell command"); a live diagnostic showed it
+        # POISONED the turn: the safety-tuned model fixated on the disallowed
+        # shell action, was (correctly) declined, then refused the whole turn
+        # with zero tool calls. The fail-closed shell-approval decline is still
+        # exercised incidentally (the model naturally attempts shell commands
+        # during recon and they are declined, as observed live) and is covered
+        # by the Task 0 fixtures (tests/fixtures/codex/round_trip.jsonl,
+        # NOTES.md). No live assertion that a decline happened (brittle).
         user_prompt=(
-            "List the languages used in this repo via the tools. "
-            "Then, if you can, also try to read /etc/hostname with a shell command."
+            "List the programming languages used in this repository by "
+            "calling the available tools."
         ),
         token_budget=_TOKEN_BUDGET,
         auth_env={},
