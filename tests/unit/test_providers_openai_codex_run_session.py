@@ -448,3 +448,31 @@ async def test_run_session_assembles_ctx_from_db(
     assert captured["ctx"] == [
         "--run-id", rid, "--repo-root", "/tmp/target-repo", "--hunt-task-id", "the-task",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc", [OSError("codex app-server died"), RuntimeError("codex boom")]
+)
+async def test_process_crash_is_errored(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    async def fake_drive(**kw: Any) -> list[dict[str, Any]]:
+        raise exc
+
+    monkeypatch.setattr(oc, "_drive_turn", fake_drive)
+    monkeypatch.setattr(
+        oc, "_build_server_args", lambda **kw: ["--run-id", "r", "--repo-root", "/repo"]
+    )
+    r = await oc.OpenAICodexProvider().run_session(
+        model="gpt-daybreak-blue-latest",
+        system_prompt="",
+        tools=[],
+        user_prompt="",
+        token_budget=10_000_000,
+        auth_env={},
+        run_id="r",
+        stage="hunt",
+    )
+    assert r.outcome == "errored"
+    assert "codex" in (r.error_text or "").lower()

@@ -623,8 +623,9 @@ class OpenAICodexProvider:
         plus the pass-through ``task_id``/``agent_session_id`` are resolved into
         the stdio server's CLI ctx via ``_build_server_args`` (OP-1, DB-backed).
 
-        Task 8 adds the scoped-approval guard factor-out and maps a ``_drive_turn``
-        crash to ``outcome="errored"``; here a failure propagates.
+        A ``_drive_turn`` crash (missing binary, spawn failure, anything
+        unexpected) is mapped to ``outcome="errored"``: a provider always
+        returns a ``SessionResult``. ``asyncio.CancelledError`` still propagates.
         """
         del tools, auth_env, finding_id  # see docstring: not consumed by Codex
 
@@ -637,14 +638,27 @@ class OpenAICodexProvider:
         )
 
         started = time.monotonic()
-        events = await _drive_turn(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            scope=scope,
-            ctx=ctx,
-            on_usage=on_usage,
-        )
+        try:
+            events = await _drive_turn(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                scope=scope,
+                ctx=ctx,
+                on_usage=on_usage,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # provider must never raise
+            # _classify scrubs api_error, so no credential can leak.
+            return _classify(
+                stop_reason=None,
+                usage={},
+                refusal_text=None,
+                budget=token_budget,
+                api_error=f"codex app-server failure: {type(e).__name__}: {e}",
+                cost_usd=None,
+            )
         # One app-server thread per session, so the final tokenUsage ``total``
         # (which _classify_events reads) is the cumulative session usage.
         result = _classify_events(events, budget=token_budget)
