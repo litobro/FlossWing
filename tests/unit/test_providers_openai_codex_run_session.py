@@ -270,6 +270,56 @@ def test_augmented_env_appends_local_bin_to_existing_path(
     assert any(p.endswith("/.local/bin") for p in path_parts)
 
 
+def test_augmented_env_pythonpath_includes_package_parent() -> None:
+    import os
+    from pathlib import Path
+
+    import flosswing
+
+    pkg_parent = str(Path(flosswing.__file__).resolve().parents[1])
+    env = oc._augmented_env()
+    # CRIT#1: the app-server-spawned MCP child (empty cwd, minimal env) must be
+    # able to `-m flosswing...` — so the package parent is on PYTHONPATH.
+    assert pkg_parent in env["PYTHONPATH"].split(os.pathsep)
+
+
+def test_augmented_env_prepends_package_parent_to_inherited_pythonpath(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    from pathlib import Path
+
+    import flosswing
+
+    monkeypatch.setenv("PYTHONPATH", "/inherited/one")
+    pkg_parent = str(Path(flosswing.__file__).resolve().parents[1])
+    env = oc._augmented_env()
+    parts = env["PYTHONPATH"].split(os.pathsep)
+    assert parts[0] == pkg_parent  # prepended
+    assert "/inherited/one" in parts  # inherited preserved
+
+
+def test_augmented_env_passes_through_docker_and_proxy_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flosswing.config import AUTH_ENV_KEYS
+
+    # IMPORTANT#3: the children need these (Docker for compile_and_run in the
+    # validate scope; proxy/CA for codex egress). None is a credential key.
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:8080")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/certs/ca.pem")
+    monkeypatch.setenv("VIRTUAL_ENV", "/tmp/flw-venv")
+    env = oc._augmented_env()
+    assert env["DOCKER_HOST"] == "unix:///var/run/docker.sock"
+    assert env["HTTPS_PROXY"] == "http://proxy:8080"
+    assert env["SSL_CERT_FILE"] == "/etc/ssl/certs/ca.pem"
+    assert env["VIRTUAL_ENV"] == "/tmp/flw-venv"
+    assert not (
+        {"DOCKER_HOST", "HTTPS_PROXY", "SSL_CERT_FILE", "VIRTUAL_ENV"} & AUTH_ENV_KEYS
+    )
+
+
 # -----------------------------------------------------------------------------
 # stage -> scope mapping (pure)
 # -----------------------------------------------------------------------------

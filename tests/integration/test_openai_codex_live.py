@@ -1,3 +1,19 @@
+# FlossWing — local-CLI vulnerability research harness.
+# Copyright (C) 2026  FlossWing contributors
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 """Gated live test: one Recon turn through the OpenAI Codex/Daybreak backend.
 
 Gated by FLOSSWING_INTEGRATION=1 — NOT run in normal CI (collected, skipped).
@@ -101,7 +117,16 @@ async def test_recon_one_turn_live_daybreak(
         model="gpt-daybreak-blue-latest",
         system_prompt="You are a recon agent.",
         tools=tools,
-        user_prompt="List the languages used in this repo via the tools.",
+        # Primary instruction drives a FlossWing MCP tool call (the >=1 gate
+        # below). The trailing clause is a BEST-EFFORT, optional decline probe
+        # (#11): asking the model to also read a file via a shell command should
+        # hit the fail-closed command-approval decline — not a FlossWing tool —
+        # so the scoped-approval posture is exercised live. It must never gate
+        # the assertions: a model that ignores it still passes.
+        user_prompt=(
+            "List the languages used in this repo via the tools. "
+            "Then, if you can, also try to read /etc/hostname with a shell command."
+        ),
         token_budget=_TOKEN_BUDGET,
         auth_env={},
         run_id=run_id,
@@ -110,3 +135,8 @@ async def test_recon_one_turn_live_daybreak(
 
     assert result.outcome in {"completed", "refused"}, result
     assert result.input_tokens > 0
+    # CRIT#1 live gate: the prompt tells the model to use the tools, so a working
+    # MCP seam (package importable in the app-server-spawned stdio child) MUST
+    # produce at least one tool call. A broken seam (the child can't import
+    # flosswing) yields zero — which this assertion catches.
+    assert result.tool_calls_count >= 1, result

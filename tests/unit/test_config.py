@@ -673,3 +673,122 @@ def test_env_or_default_model_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     # Empty string is treated as unset (falls back to default) — documented behavior.
     monkeypatch.setenv("FLOSSWING_MODEL", "")
     assert cfg_mod.env_or_default_model() == cfg_mod.DEFAULT_MODEL
+
+
+# --- Provider-aware default model (spec §7) ---------------------------------
+
+
+def _fake_codex_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the OpenAI/Codex provider's offline auth probe pass (no real CLI)."""
+    from flosswing.agent.providers import openai_codex
+    monkeypatch.setattr(openai_codex, "_codex_installed", lambda: True)
+    monkeypatch.setattr(openai_codex, "_codex_logged_in", lambda: True)
+
+
+def test_resolve_openai_default_model_is_daybreak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    _fake_codex_login(monkeypatch)
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="openai",
+    )
+    assert cfg.provider == "openai"
+    assert cfg.model == "gpt-daybreak-blue-latest"
+    from flosswing.agent.providers.openai_codex import OpenAICodexProvider
+    assert cfg.model == OpenAICodexProvider.default_model
+
+
+def test_resolve_anthropic_default_model_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="anthropic",
+    )
+    assert cfg.model == cfg_mod.DEFAULT_MODEL == "claude-opus-4-8"
+
+
+def test_resolve_openai_explicit_flag_model_overrides_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    _fake_codex_login(monkeypatch)
+    cfg = resolve(
+        repo_root=tmp_path, model="gpt-custom-x", recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="openai",
+    )
+    assert cfg.model == "gpt-custom-x"
+
+
+def test_resolve_openai_flosswing_model_env_overrides_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _strip_all_auth(monkeypatch)
+    _fake_codex_login(monkeypatch)
+    monkeypatch.setenv("FLOSSWING_MODEL", "gpt-env-y")
+    cfg = resolve(
+        repo_root=tmp_path, model=None, recon_token_budget=None,
+        hunt_token_budget=None, validate_token_budget=None,
+        gapfill_token_budget=None, provider="openai",
+    )
+    assert cfg.model == "gpt-env-y"
+
+
+def test_resolve_openai_with_claude_model_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import logging
+
+    _strip_all_auth(monkeypatch)
+    _fake_codex_login(monkeypatch)
+    monkeypatch.setenv("FLOSSWING_MODEL", "claude-opus-4-8")
+
+    # Capture by attaching a handler directly to the config logger rather than
+    # via the `caplog` fixture. In a full-suite run an earlier test runs Alembic
+    # migrations, whose fileConfig(disable_existing_loggers=True) leaves the
+    # `flosswing.config` logger with .disabled=True — leaked global state that
+    # would swallow the warning. We force it enabled here (and restore after) so
+    # the assertion reflects this unit's behavior, not test ordering.
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Capture()
+    cfg_logger = logging.getLogger("flosswing.config")
+    prev_level = cfg_logger.level
+    prev_disabled = cfg_logger.disabled
+    cfg_logger.addHandler(handler)
+    cfg_logger.setLevel(logging.WARNING)
+    cfg_logger.disabled = False
+    try:
+        cfg = resolve(
+            repo_root=tmp_path, model=None, recon_token_budget=None,
+            hunt_token_budget=None, validate_token_budget=None,
+            gapfill_token_budget=None, provider="openai",
+        )
+    finally:
+        cfg_logger.removeHandler(handler)
+        cfg_logger.setLevel(prev_level)
+        cfg_logger.disabled = prev_disabled
+
+    assert cfg.model == "claude-opus-4-8"  # not overridden, just warned
+    assert any(
+        "openai" in r.getMessage() and "claude-opus-4-8" in r.getMessage()
+        for r in records
+    )
+
+
+def test_anthropic_provider_default_model_matches_config_default() -> None:
+    from flosswing.agent.providers.anthropic_sdk import AnthropicSDKProvider
+
+    # Pins the hardcoded provider attribute to config's source-of-truth literal.
+    assert AnthropicSDKProvider.default_model == cfg_mod.DEFAULT_MODEL

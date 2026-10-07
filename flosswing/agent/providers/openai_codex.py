@@ -33,6 +33,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from flosswing.agent.providers.base import (
@@ -74,6 +75,9 @@ def _codex_logged_in() -> bool:
             check=False,
             capture_output=True,
             timeout=10,
+            # Minimal allowlisted env (same posture as the app-server child): never
+            # hand this probe the FlossWing credentials (ANTHROPIC_API_KEY, ...).
+            env=_augmented_env(),
         )
     except (subprocess.TimeoutExpired, OSError):
         return False
@@ -355,13 +359,29 @@ def _augmented_env() -> dict[str, str]:
     is a node CLI) are added after the inherited PATH. ``FLOSSWING_DB_URL`` and
     any other ``FLOSSWING_*`` key must pass through so the stdio MCP child the
     app-server spawns reaches the same state DB.
+
+    PYTHONPATH is PREPENDED with the flosswing package's parent dir so the
+    stdio MCP child (``sys.executable -m flosswing.agent.mcp_stdio_server``,
+    launched by the app-server with ``cwd`` = an empty temp dir and this env)
+    can import ``flosswing`` even in a source checkout with no install and no
+    inherited PYTHONPATH. This is a path, never a credential.
     """
     # Imported here (not at module top) to avoid a config<->registry<->provider
     # import cycle; by call time every module is already loaded.
     from flosswing.config import AUTH_ENV_KEYS
 
     src = os.environ
-    allow_exact = {"HOME", "CODEX_HOME", "LANG", "TERM", "TMPDIR", "PATH"}
+    allow_exact = {
+        "HOME", "CODEX_HOME", "LANG", "TERM", "TMPDIR", "PATH",
+        # compile_and_run's Docker in the validate scope needs the daemon/context.
+        "DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "DOCKER_CONTEXT",
+        "XDG_RUNTIME_DIR",
+        # codex's own network egress (proxy + CA bundle).
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE",
+        # active virtualenv marker (none of the above are in AUTH_ENV_KEYS).
+        "VIRTUAL_ENV",
+    }
     out: dict[str, str] = {}
     for key, val in src.items():
         if key in AUTH_ENV_KEYS:
@@ -379,6 +399,17 @@ def _augmented_env() -> dict[str, str]:
     if node:
         parts.append(os.path.dirname(node))
     out["PATH"] = os.pathsep.join(p for p in parts if p)
+
+    # Prepend the flosswing package parent so `-m flosswing...` resolves in the
+    # app-server-spawned MCP child (empty cwd, minimal env, maybe no install).
+    import flosswing
+
+    pkg_parent = str(Path(flosswing.__file__).resolve().parents[1])
+    pp_parts = [pkg_parent]
+    inherited_pp = src.get("PYTHONPATH", "")
+    if inherited_pp:
+        pp_parts.append(inherited_pp)
+    out["PYTHONPATH"] = os.pathsep.join(pp_parts)
     return out
 
 
@@ -522,6 +553,7 @@ async def _drive_turn(
         return await asyncio.wait_for(fut, timeout=_REQUEST_TIMEOUT_S)
 
     reader_task = asyncio.create_task(_reader())
+    turn_start_error = False
     try:
         await _request(
             "initialize",
@@ -550,24 +582,35 @@ async def _drive_turn(
         thread = (ts.get("result") or {}).get("thread") or {}
         thread_id = thread.get("id")
         if not isinstance(thread_id, str):
-            raise RuntimeError("codex app-server did not return a thread id")
+            ts_err = ts.get("error")
+            raise RuntimeError(
+                f"codex app-server thread/start failed: {ts_err}"
+                if ts_err is not None
+                else "codex app-server did not return a thread id"
+            )
 
-        await _send(
+        # turn/start rides through _request (not a raw _send): its JSON-RPC
+        # response is an ack that precedes the notification stream. If it carries
+        # an `error` (bad model, bad params) no turn/* stream — hence no
+        # turn/completed — will ever follow, so we must NOT block for the full
+        # turn timeout. The error response is already in `collected` (the reader
+        # appends every message), so _classify_events still reduces to errored.
+        turn_resp = await _request(
+            "turn/start",
             {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "turn/start",
-                "params": {
-                    "threadId": thread_id,
-                    "input": [
-                        {"type": "text", "text": user_prompt, "text_elements": []}
-                    ],
-                },
-            }
+                "threadId": thread_id,
+                "input": [
+                    {"type": "text", "text": user_prompt, "text_elements": []}
+                ],
+            },
+            req_id=3,
         )
-
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(turn_done.wait(), timeout=_TURN_TIMEOUT_S)
+        if turn_resp.get("error") is not None:
+            turn_start_error = True
+            turn_done.set()
+        else:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(turn_done.wait(), timeout=_TURN_TIMEOUT_S)
     finally:
         reader_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -577,14 +620,24 @@ async def _drive_turn(
                 proc.stdin.close()
         with contextlib.suppress(ProcessLookupError):
             proc.terminate()
-        with contextlib.suppress(Exception):
+        try:
             await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except Exception:
+            # terminate() did not reap it in time (or wait failed): hard-kill so a
+            # stuck app-server AND its spawned MCP child can't leak as zombies.
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
         shutil.rmtree(work_dir, ignore_errors=True)
 
-    if not turn_completed:
-        # The turn never reached ``turn/completed`` (timeout, EOF, or crash).
-        # Feed a synthetic JSON-RPC error event so _classify_events yields
-        # ``errored`` — a stalled/timed-out turn must never be a silent success.
+    if not turn_completed and not turn_start_error:
+        # The turn never reached ``turn/completed`` (timeout, EOF, or crash) and
+        # turn/start did not already surface its own error. Feed a synthetic
+        # JSON-RPC error event so _classify_events yields ``errored`` — a
+        # stalled/timed-out turn must never be a silent success. (When
+        # turn_start_error is set, the server's specific error response is
+        # already in `collected`, so we keep that instead of this generic one.)
         collected.append(
             {"error": {"message": "codex app-server turn did not complete"}}
         )
@@ -594,6 +647,9 @@ async def _drive_turn(
 class OpenAICodexProvider:
     name = "openai"
     auth_env_keys: frozenset[str] = frozenset()
+    # Provider-aware default model (read by config.resolve via getattr). Plain
+    # class attribute, NOT a Provider-Protocol member, so stubs are unaffected.
+    default_model: str = "gpt-daybreak-blue-latest"
 
     def validate_auth(self, env: Mapping[str, str]) -> None:
         if not (_codex_installed() and _codex_logged_in()):
@@ -629,16 +685,20 @@ class OpenAICodexProvider:
         """
         del tools, auth_env, finding_id  # see docstring: not consumed by Codex
 
-        scope = _stage_to_scope(stage)
-        ctx = _build_server_args(
-            scope=scope,
-            run_id=run_id,
-            task_id=task_id,
-            agent_session_id=agent_session_id,
-        )
-
         started = time.monotonic()
         try:
+            # Stage->scope + DB-backed ctx assembly live INSIDE the try so a bad
+            # stage (ValueError) or an unrecoverable DB/ctx read (RuntimeError)
+            # becomes an ``errored`` SessionResult, honoring the "a provider
+            # always returns a SessionResult" contract rather than aborting the
+            # whole run.
+            scope = _stage_to_scope(stage)
+            ctx = _build_server_args(
+                scope=scope,
+                run_id=run_id,
+                task_id=task_id,
+                agent_session_id=agent_session_id,
+            )
             events = await _drive_turn(
                 model=model,
                 system_prompt=system_prompt,
@@ -651,13 +711,16 @@ class OpenAICodexProvider:
             raise
         except Exception as e:  # provider must never raise
             # _classify scrubs api_error, so no credential can leak.
-            return _classify(
+            errored = _classify(
                 stop_reason=None,
                 usage={},
                 refusal_text=None,
                 budget=token_budget,
                 api_error=f"codex app-server failure: {type(e).__name__}: {e}",
                 cost_usd=None,
+            )
+            return dataclasses.replace(
+                errored, duration_ms=int((time.monotonic() - started) * 1000)
             )
         # One app-server thread per session, so the final tokenUsage ``total``
         # (which _classify_events reads) is the cumulative session usage.
