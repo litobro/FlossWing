@@ -201,3 +201,29 @@ def test_render_scorecard_contains_metrics(isolated_db: Path) -> None:
     assert "v02_smoke" in text
     assert "precision" in text.lower()
     assert "recall" in text.lower()
+
+
+def test_run_evaluation_threads_provider(
+    isolated_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`provider` flows run_evaluation -> run_and_score -> config.resolve."""
+    seen: list[str | None] = []
+
+    def fake_run_and_score(
+        entry: CorpusEntry, **kw: object
+    ) -> tuple[str, runner.ScoreReport]:
+        seen.append(kw.get("provider"))  # type: ignore[arg-type]
+        return "r1", runner.scoring.score([], [])
+
+    monkeypatch.setattr(runner, "run_and_score", fake_run_and_score)
+    mdir = tmp_path / "gt"
+    mdir.mkdir()
+    (mdir / "x.toml").write_text(
+        'name = "x"\nrepo = "x"\n[[vuln]]\nid = "V"\nfile = "a.py"\n'
+        'line_start = 1\nline_end = 2\nattack_class = "sqli"\n',
+        encoding="utf-8",
+    )
+    runner.run_evaluation(
+        manifest_dir=mdir, corpus_root=tmp_path, corpus_name="x", provider="openai"
+    )
+    assert seen == ["openai"]

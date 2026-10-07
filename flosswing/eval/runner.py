@@ -98,7 +98,11 @@ def score_run(
 
 
 def run_and_score(
-    entry: CorpusEntry, *, corpus_root: Path, include_uncertain: bool = False
+    entry: CorpusEntry,
+    *,
+    corpus_root: Path,
+    include_uncertain: bool = False,
+    provider: str | None = None,
 ) -> tuple[str, ScoreReport]:
     """Run the full pipeline against the entry's repo, then score it.
 
@@ -106,7 +110,7 @@ def run_and_score(
     """
     repo_root = (corpus_root / entry.repo).resolve()
     cfg = fcfg.resolve(
-        repo_root=repo_root, model=None, provider=None,
+        repo_root=repo_root, model=None, provider=provider,
         recon_token_budget=None, hunt_token_budget=None,
         validate_token_budget=None, gapfill_token_budget=None,
         dedupe_token_budget=None, trace_token_budget=None,
@@ -125,6 +129,7 @@ def run_evaluation(
     from_run: str | None = None,
     corpus_name: str | None = None,
     include_uncertain: bool = False,
+    provider: str | None = None,
 ) -> EvalResult:
     """Score one existing run (``from_run``) or scan+score the corpus."""
     if from_run is not None:
@@ -145,7 +150,10 @@ def run_evaluation(
     repos: list[RepoResult] = []
     for entry in entries:
         run_id, rep = run_and_score(
-            entry, corpus_root=corpus_root, include_uncertain=include_uncertain
+            entry,
+            corpus_root=corpus_root,
+            include_uncertain=include_uncertain,
+            provider=provider,
         )
         repos.append(RepoResult(name=entry.name, run_id=run_id, score=rep))
     agg = scoring.aggregate([r.score for r in repos]) if repos else _empty_score()
