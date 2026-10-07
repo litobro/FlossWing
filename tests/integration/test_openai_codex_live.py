@@ -117,19 +117,21 @@ async def test_recon_one_turn_live_daybreak(
         model="gpt-daybreak-blue-latest",
         system_prompt="You are a recon agent.",
         tools=tools,
-        # Clean tool-use-only instruction (drives the >=1 gate below). A prior
-        # revision appended a decline-probe clause ("...also try to read
-        # /etc/hostname with a shell command"); a live diagnostic showed it
-        # POISONED the turn: the safety-tuned model fixated on the disallowed
-        # shell action, was (correctly) declined, then refused the whole turn
-        # with zero tool calls. The fail-closed shell-approval decline is still
-        # exercised incidentally (the model naturally attempts shell commands
-        # during recon and they are declined, as observed live) and is covered
-        # by the Task 0 fixtures (tests/fixtures/codex/round_trip.jsonl,
-        # NOTES.md). No live assertion that a decline happened (brittle).
+        # FORCING tool-use instruction (drives the >=1 gate below). History:
+        # a decline-probe clause ("...also read /etc/hostname via shell")
+        # poisoned the turn into a refusal; removing it, a SOFT prompt ("list
+        # the languages") was still flaky — the live model is non-deterministic
+        # about tool use and sometimes answers from assumption with zero calls
+        # (observed: outcome=completed, 0 tool calls). So the prompt now demands
+        # output the model cannot produce without a tool call: report list_dir's
+        # exact entries. A working MCP seam reliably yields >=1 call; a broken
+        # seam still can't (the gate's purpose). The fail-closed shell-approval
+        # decline is exercised incidentally and covered by the Task 0 fixtures
+        # (tests/fixtures/codex/round_trip.jsonl, NOTES.md).
         user_prompt=(
-            "List the programming languages used in this repository by "
-            "calling the available tools."
+            "Use the provided tools only; do not answer from assumptions. "
+            "Call the list_dir tool on path '.' and report back the exact "
+            "top-level file and directory names it returns."
         ),
         token_budget=_TOKEN_BUDGET,
         auth_env={},
